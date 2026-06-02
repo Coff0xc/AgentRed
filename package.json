@@ -1,9 +1,9 @@
 {
-  "name": "authorized-ai-pentest-platform",
+  "name": "agent-red",
   "version": "0.1.0",
   "private": false,
   "type": "module",
-  "description": "Local-first authorized AI penetration testing platform core.",
+  "description": "AI red team workbench for scoped testing and evidence-driven reporting.",
   "license": "MIT",
   "keywords": [
     "authorized-security",

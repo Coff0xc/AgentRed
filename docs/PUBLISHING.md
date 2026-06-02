@@ -26,7 +26,7 @@ npm run build
 
 Recommended About fields:
 
-- Description: `Local-first authorized AI penetration testing platform core.`
+- Description: `AI red team workbench for scoped testing and evidence-driven reporting. / 面向范围授权测试与证据化报告的 AI 红队工作台。`
 - Topics: `authorized-security`, `ai-security`, `pentest`, `bug-bounty`, `red-team`, `typescript`, `evidence`
 - Visibility: start as private until a maintainer has reviewed local state and release notes
 

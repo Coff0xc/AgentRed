@@ -1,6 +1,6 @@
-# Authorized AI Pentest Platform
+# AgentRed
 
-Local-first core for a commercial AI-assisted penetration testing and bug bounty workbench.
+AI red team workbench for scoped testing and evidence-driven reporting. / 面向范围授权测试与证据化报告的 AI 红队工作台。
 
 This repository implements the platform kernel from the architecture plan:
 

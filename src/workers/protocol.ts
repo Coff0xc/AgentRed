@@ -4,7 +4,7 @@ import type { WorkerTask } from './types.js';
 
 export interface WorkerProtocolEnvelope {
   protocolVersion: 'agent-worker.v1';
-  role: 'authorized-ai-pentest-worker';
+  role: 'agentred-worker';
   contract: {
     objective: string;
     hardRules: string[];
@@ -27,7 +27,7 @@ export interface WorkerProtocolEnvelope {
 export function buildWorkerProtocolEnvelope(task: WorkerTask): WorkerProtocolEnvelope {
   return {
     protocolVersion: 'agent-worker.v1',
-    role: 'authorized-ai-pentest-worker',
+    role: 'agentred-worker',
     contract: {
       objective:
         'Explore only the authorized run graph and return one structured JSON result for the dispatcher to validate.',

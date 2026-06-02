@@ -101,7 +101,7 @@ async function route(
   if (method === 'GET' && url.pathname === '/') {
     sendJson(response, 200, {
       status: 'ok',
-      service: 'Authorized AI Pentest Platform API',
+      service: 'AgentRed API',
       auth: 'required for all routes except / and /health',
       health: '/health',
       app: '/app',
@@ -1349,7 +1349,7 @@ async function handleHttpProxyRequest(
   if (!isProxyAuthorized(request, authToken)) {
     response.writeHead(407, {
       'content-type': 'application/json; charset=utf-8',
-      'proxy-authenticate': 'Bearer realm="authorized-ai-pentest-platform"',
+      'proxy-authenticate': 'Bearer realm="agent-red"',
     });
     response.end(JSON.stringify({ error: 'Proxy authentication required' }));
     return;

@@ -466,7 +466,7 @@ test('ReportService records a replay bundle evidence artifact', () => {
   const reportEvidence = platform.graph.getGraph(run.id).evidence.find((item) => item.id === report.evidenceId);
   assert.equal(reportEvidence?.kind, 'replay_bundle');
   const reportContent = platform.evidence.readEvidenceContent(report.evidenceId).toString('utf8');
-  assert.match(reportContent, /Authorized AI Pentest Report/);
+  assert.match(reportContent, /AgentRed Report/);
   assert.match(reportContent, /Report bundle evidence trail/);
   assert.doesNotMatch(reportContent, /Rejected report candidate/);
   assert.match(reportContent, new RegExp(evidence.id));
@@ -943,14 +943,14 @@ test('REST API creates runs, records hints, returns graphs, and generates report
     });
     assert.equal(reportResponse.status, 201);
     const report = (await reportResponse.json()) as { markdown: string; evidenceId: string };
-    assert.match(report.markdown, /Authorized AI Pentest Report/);
+    assert.match(report.markdown, /AgentRed Report/);
     assert.ok(report.evidenceId);
     const reportEvidenceResponse = await fetch(`${api.url}/evidence/${report.evidenceId}/content`, {
       headers: { authorization: 'Bearer test-token' },
     });
     assert.equal(reportEvidenceResponse.status, 200);
     const reportEvidence = (await reportEvidenceResponse.json()) as { content: string };
-    assert.match(reportEvidence.content, /Authorized AI Pentest Report/);
+    assert.match(reportEvidence.content, /AgentRed Report/);
   } finally {
     await api.close();
   }
