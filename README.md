@@ -31,6 +31,7 @@ AgentRed is a local-first platform kernel for authorized security assessments. I
 ## Contents
 
 - [At A Glance](#at-a-glance)
+- [Screenshots](#screenshots)
 - [Why AgentRed Exists](#why-agentred-exists)
 - [Current Status](#current-status)
 - [Core Concepts](#core-concepts)
@@ -49,6 +50,16 @@ AgentRed is a local-first platform kernel for authorized security assessments. I
 - [Roadmap](#roadmap)
 - [Documentation](#documentation)
 - [License](#license)
+
+## Screenshots
+
+### Operator Console
+
+![AgentRed Operator Console showing run progress and the evidence-first workflow](docs/assets/agentred-operator-console.png)
+
+### Evidence Review
+
+![AgentRed Review Workspace showing the evidence inbox and local evidence viewer](docs/assets/agentred-review-workspace.png)
 
 ## Why AgentRed Exists
 
