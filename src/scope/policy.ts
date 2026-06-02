@@ -1,0 +1,87 @@
+import type { ApprovalStatus, RiskLevel, ScopePolicy } from '../domain/types.js';
+
+export interface ScopeDecision {
+  action: 'allow' | 'deny' | 'approval_required';
+  reason: string;
+}
+
+export function evaluateScope(
+  policy: ScopePolicy,
+  target: string,
+  method: string,
+  riskLevel: RiskLevel,
+  approvalStatus?: ApprovalStatus,
+): ScopeDecision {
+  const normalizedMethod = method.toUpperCase();
+  const normalizedTarget = normalizeTarget(target);
+
+  if (!policy.allowedMethods.map((item) => item.toUpperCase()).includes(normalizedMethod)) {
+    return { action: 'deny', reason: `HTTP method ${normalizedMethod} is not allowed by scope policy` };
+  }
+
+  if (riskLevel === 'R4') {
+    return { action: 'deny', reason: 'R4 actions are prohibited by default' };
+  }
+
+  if (policy.deniedAssets.some((asset) => assetMatches(asset, normalizedTarget))) {
+    return { action: 'deny', reason: `${normalizedTarget} is explicitly denied by scope policy` };
+  }
+
+  if (!policy.allowedAssets.some((asset) => assetMatches(asset, normalizedTarget))) {
+    return { action: 'deny', reason: `${normalizedTarget} is outside the authorized scope` };
+  }
+
+  if (riskLevel === 'R3' && approvalStatus !== 'approved') {
+    return { action: 'approval_required', reason: 'R3 action requires explicit human approval' };
+  }
+
+  return { action: 'allow', reason: 'Allowed by scope policy' };
+}
+
+function normalizeTarget(target: string): string {
+  const trimmed = target.trim().toLowerCase();
+  if (isCidr(trimmed)) {
+    return trimmed;
+  }
+  try {
+    return new URL(trimmed).hostname.toLowerCase();
+  } catch {
+    return trimmed.replace(/\/.*$/, '');
+  }
+}
+
+function assetMatches(asset: string, targetHost: string): boolean {
+  const normalizedAsset = normalizeTarget(asset);
+  if (isCidr(normalizedAsset)) {
+    return ipv4InCidr(targetHost, normalizedAsset);
+  }
+  if (normalizedAsset.startsWith('*.')) {
+    const suffix = normalizedAsset.slice(1);
+    return targetHost.endsWith(suffix) && targetHost !== normalizedAsset.slice(2);
+  }
+  return normalizedAsset === targetHost;
+}
+
+function isCidr(value: string): boolean {
+  return /^\d{1,3}(?:\.\d{1,3}){3}\/\d{1,2}$/.test(value);
+}
+
+function ipv4InCidr(ip: string, cidr: string): boolean {
+  if (!/^\d{1,3}(?:\.\d{1,3}){3}$/.test(ip)) {
+    return false;
+  }
+  const [base, prefixText] = cidr.split('/');
+  const prefix = Number(prefixText);
+  if (prefix < 0 || prefix > 32) {
+    return false;
+  }
+  const mask = prefix === 0 ? 0 : (0xffffffff << (32 - prefix)) >>> 0;
+  return (ipv4ToInt(ip) & mask) === (ipv4ToInt(base) & mask);
+}
+
+function ipv4ToInt(ip: string): number {
+  return ip
+    .split('.')
+    .map(Number)
+    .reduce((acc, octet) => ((acc << 8) + octet) >>> 0, 0);
+}

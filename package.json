@@ -1,0 +1,31 @@
+{
+  "name": "authorized-ai-pentest-platform",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "description": "Local-first authorized AI penetration testing platform core.",
+  "license": "MIT",
+  "keywords": [
+    "authorized-security",
+    "ai-security",
+    "pentest",
+    "bug-bounty",
+    "red-team",
+    "evidence",
+    "typescript"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "tsx --test tests/*.test.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "dev": "tsx src/index.ts"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.0",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  }
+}
