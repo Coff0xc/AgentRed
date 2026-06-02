@@ -40,7 +40,7 @@ export class ReportService {
       }
     }
     const markdown = [
-      '# Authorized AI Pentest Report',
+      '# AgentRed Report',
       '',
       `**Format**: ${input.format}`,
       `**Finding scope**: ${findingScope}`,

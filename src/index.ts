@@ -10,5 +10,5 @@ const authToken = process.env.PLATFORM_API_TOKEN ?? randomBytes(24).toString('he
 const platform = createPlatform({ databasePath });
 const api = await startApiServer(platform, { port, authToken });
 
-console.log(`Authorized AI pentest platform API listening on ${api.url}`);
+console.log(`AgentRed API listening on ${api.url}`);
 console.log(`Local API token: ${authToken}`);

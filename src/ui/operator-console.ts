@@ -11,7 +11,7 @@ export const OPERATOR_CONSOLE_HTML = `<!doctype html>
       <div class="brand-lockup">
         <div class="brand-mark" aria-hidden="true">AI</div>
         <div>
-          <p class="eyebrow">Authorized AI Pentest Platform</p>
+          <p class="eyebrow">AgentRed</p>
           <h1>Operator Console</h1>
           <p class="topbar-subtitle">Local mission control for scope, evidence, workers, and report gates.</p>
         </div>
@@ -2722,7 +2722,7 @@ export const OPERATOR_CONSOLE_JS = `(() => {
 
   const translations = {
     'zh-CN': {
-      'Authorized AI Pentest Platform': '授权 AI 渗透测试平台',
+      'AgentRed': 'AgentRed',
       'Operator Console': '操作台',
       'Local mission control for scope, evidence, workers, and report gates.': '用于范围、证据、Worker 和报告门禁的本地任务控制台。',
       'Operator console sections': '操作台分区',

@@ -944,7 +944,7 @@ Example response:
   },
   "envelope": {
     "protocolVersion": "agent-worker.v1",
-    "role": "authorized-ai-pentest-worker"
+    "role": "agentred-worker"
   }
 }
 ```
