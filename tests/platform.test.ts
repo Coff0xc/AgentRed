@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { mkdirSync, rmSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { createServer, request as httpRequest, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -8,6 +9,7 @@ import test from 'node:test';
 import { startApiServer } from '../src/api/server.js';
 import { resolveApiStartupConfig } from '../src/api/startup-config.js';
 import { Dispatcher } from '../src/dispatcher/dispatcher.js';
+import { OastService } from '../src/oast/oast-service.js';
 import { createPlatform } from '../src/platform.js';
 import { evaluateScope } from '../src/scope/policy.js';
 import type { ScopePolicy } from '../src/domain/types.js';
@@ -31,6 +33,50 @@ test('ScopePolicy allows in-scope traffic and blocks denied, out-of-scope, R3, a
   assert.equal(evaluateScope(policy, 'https://api.example.com/v1/users', 'POST', 'R3').action, 'approval_required');
   assert.equal(evaluateScope(policy, 'https://api.example.com/v1/users', 'POST', 'R3', 'approved').action, 'allow');
   assert.equal(evaluateScope(policy, 'https://api.example.com/v1/users', 'POST', 'R4', 'approved').action, 'deny');
+  assert.equal(
+    evaluateScope(
+      { ...policy, r4AuthorizationToken: 'break-glass' },
+      'https://api.example.com/v1/users',
+      'POST',
+      'R4',
+      undefined,
+      'break-glass',
+    ).action,
+    'approval_required',
+  );
+  assert.equal(
+    evaluateScope(
+      { ...policy, r4AuthorizationToken: 'break-glass' },
+      'https://api.example.com/v1/users',
+      'POST',
+      'R4',
+      'approved',
+      'wrong-token',
+    ).action,
+    'deny',
+  );
+  assert.equal(
+    evaluateScope(
+      { ...policy, r4AuthorizationToken: 'break-glass' },
+      'https://evil.test',
+      'POST',
+      'R4',
+      'approved',
+      'break-glass',
+    ).action,
+    'deny',
+  );
+  assert.equal(
+    evaluateScope(
+      { ...policy, r4AuthorizationToken: 'break-glass' },
+      'https://api.example.com/v1/users',
+      'POST',
+      'R4',
+      'approved',
+      'break-glass',
+    ).action,
+    'allow',
+  );
   assert.equal(evaluateScope(policy, '10.10.0.42', 'GET', 'R1').action, 'allow');
 });
 
@@ -149,6 +195,135 @@ test('ToolGateway enforces run rate limits before execution', async () => {
   }
 });
 
+test('ToolGateway requires matching R4 token and approval before execution', async () => {
+  const target = await startTargetServer();
+  const platform = createPlatform();
+  const run = platform.graph.createRun({
+    target: target.url,
+    goal: 'Validate R4 break-glass gates',
+    scopePolicy: {
+      ...policy,
+      allowedAssets: ['127.0.0.1'],
+      deniedAssets: [],
+      r4AuthorizationToken: 'break-glass',
+    },
+    workerPool: [{ name: 'mock-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+
+  try {
+    const missingToken = await platform.tools.invoke({
+      runId: run.id,
+      tool: 'http.request',
+      target: `${target.url}/profile`,
+      method: 'GET',
+      riskLevel: 'R4',
+      args: {},
+    });
+    assert.equal(missingToken.status, 'blocked');
+    assert.match(missingToken.reason, /authorization token/i);
+
+    const wrongScope = await platform.tools.invoke({
+      runId: run.id,
+      tool: 'http.request',
+      target: 'https://evil.test/profile',
+      method: 'GET',
+      riskLevel: 'R4',
+      args: {},
+      r4AuthorizationToken: 'break-glass',
+    });
+    assert.equal(wrongScope.status, 'blocked');
+    assert.match(wrongScope.reason, /outside the authorized scope/i);
+
+    const approval = await platform.tools.invoke({
+      runId: run.id,
+      tool: 'http.request',
+      target: `${target.url}/profile`,
+      method: 'GET',
+      riskLevel: 'R4',
+      args: {},
+      r4AuthorizationToken: 'break-glass',
+    });
+    assert.equal(approval.status, 'approval_required');
+    assert.ok(approval.approvalId);
+    platform.approvals.decide(approval.approvalId, 'approved');
+
+    const wrongTokenAfterApproval = await platform.tools.invoke({
+      runId: run.id,
+      tool: 'http.request',
+      target: `${target.url}/profile`,
+      method: 'GET',
+      riskLevel: 'R4',
+      args: {},
+      approvalId: approval.approvalId,
+      r4AuthorizationToken: 'wrong-token',
+    });
+    assert.equal(wrongTokenAfterApproval.status, 'blocked');
+
+    const allowed = await platform.tools.invoke({
+      runId: run.id,
+      tool: 'http.request',
+      target: `${target.url}/profile`,
+      method: 'GET',
+      riskLevel: 'R4',
+      args: {},
+      approvalId: approval.approvalId,
+      r4AuthorizationToken: 'break-glass',
+    });
+    assert.equal(allowed.status, 'allowed');
+  } finally {
+    await target.close();
+  }
+});
+
+test('R4 break-glass token is redacted from API responses, worker envelopes, and exports', async () => {
+  const platform = createPlatform();
+  const api = await startApiServer(platform, { port: 0, authToken: 'test-token' });
+  const authHeaders = { authorization: 'Bearer test-token', 'content-type': 'application/json' };
+  try {
+    const createResponse = await fetch(`${api.url}/runs`, {
+      method: 'POST',
+      headers: authHeaders,
+      body: JSON.stringify({
+        target: 'https://app.example.com',
+        goal: 'Keep break-glass token internal',
+        scopePolicy: { ...policy, r4AuthorizationToken: 'api-break-glass-secret' },
+        workerPool: [{ name: 'mock-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+      }),
+    });
+    assert.equal(createResponse.status, 201);
+    const created = await createResponse.json() as { id: string; scopePolicy: { r4AuthorizationToken?: string } };
+    assert.equal(created.scopePolicy.r4AuthorizationToken, '[redacted]');
+    assert.equal(platform.store.state.runs[created.id]?.scopePolicy.r4AuthorizationToken, 'api-break-glass-secret');
+
+    const listPayload = await (await fetch(`${api.url}/runs`, { headers: { authorization: 'Bearer test-token' } })).text();
+    assert.ok(!listPayload.includes('api-break-glass-secret'));
+    assert.ok(listPayload.includes('[redacted]'));
+
+    const graphPayload = await (await fetch(`${api.url}/runs/${created.id}/graph`, { headers: { authorization: 'Bearer test-token' } })).text();
+    assert.ok(!graphPayload.includes('api-break-glass-secret'));
+    assert.ok(graphPayload.includes('[redacted]'));
+
+    const reviewPayload = await (await fetch(`${api.url}/runs/${created.id}/review`, { headers: { authorization: 'Bearer test-token' } })).text();
+    assert.ok(!reviewPayload.includes('api-break-glass-secret'));
+    assert.ok(reviewPayload.includes('[redacted]'));
+
+    const envelope = await platform.dispatcher.previewEnvelope(created.id);
+    const envelopeJson = JSON.stringify(envelope);
+    assert.ok(!envelopeJson.includes('api-break-glass-secret'));
+    assert.ok(envelopeJson.includes('[redacted]'));
+
+    const oast = platform.oast.start({ runId: created.id, baseUrl: 'http://127.0.0.1:4317' });
+    const exportRecord = platform.runExports.generate({ runId: created.id, findingScope: 'candidate_and_confirmed' });
+    const exportContent = platform.evidence.readEvidenceContent(exportRecord.evidenceId).toString('utf8');
+    assert.ok(!exportContent.includes('api-break-glass-secret'));
+    assert.ok(!exportContent.includes(oast.token));
+    assert.ok(!exportContent.includes(oast.callbackUrl));
+    assert.ok(exportContent.includes('"r4AuthorizationToken": "[redacted]"'));
+  } finally {
+    await api.close();
+  }
+});
+
 test('ToolGateway exposes a tool catalog and scanner.run_template records template evidence', async () => {
   const target = await startTargetServer();
   const platform = createPlatform();
@@ -158,6 +333,7 @@ test('ToolGateway exposes a tool catalog and scanner.run_template records templa
     scopePolicy: {
       ...policy,
       allowedAssets: ['127.0.0.1'],
+      allowedMethods: ['GET', 'HEAD'],
       deniedAssets: [],
     },
     workerPool: [{ name: 'mock-worker', type: 'mock', maxRunning: 1, priority: 0 }],
@@ -172,6 +348,10 @@ test('ToolGateway exposes a tool catalog and scanner.run_template records templa
     assert.ok(scanner.templates.some((template) => template.id === 'web.technology_fingerprint'));
     assert.ok(scanner.templates.some((template) => template.id === 'web.cookie_flags'));
     assert.ok(scanner.templates.some((template) => template.id === 'web.link_form_map'));
+    assert.ok(scanner.templates.some((template) => template.id === 'web.auth_endpoint_discovery'));
+    assert.ok(scanner.templates.some((template) => template.id === 'web.api_version_discovery'));
+    assert.ok(scanner.templates.some((template) => template.id === 'web.host_header_probe'));
+    assert.ok(scanner.templates.some((template) => template.id === 'web.param_probe'));
     assert.ok(
       scanner.templates.some(
         (template) =>
@@ -228,6 +408,65 @@ test('ToolGateway exposes a tool catalog and scanner.run_template records templa
     assert.match(fingerprintContent, /x-powered-by/);
     assert.match(fingerprintContent, /next\.js/);
 
+    const authEndpoints = await platform.tools.invoke({
+      runId: run.id,
+      tool: 'scanner.run_template',
+      target: `${target.url}/profile?token=scanner-secret`,
+      method: 'HEAD',
+      riskLevel: 'R1',
+      args: { template: 'web.auth_endpoint_discovery' },
+    });
+    assert.equal(authEndpoints.status, 'allowed');
+    assert.ok(authEndpoints.evidenceId);
+    const authContent = platform.evidence.readEvidenceContent(authEndpoints.evidenceId).toString('utf8');
+    assert.match(authContent, /web.auth_endpoint_discovery/);
+    assert.match(authContent, /\/login/);
+    assert.ok(!authContent.includes('scanner-secret'));
+
+    const apiVersions = await platform.tools.invoke({
+      runId: run.id,
+      tool: 'scanner.run_template',
+      target: `${target.url}/profile`,
+      method: 'HEAD',
+      riskLevel: 'R1',
+      args: { template: 'web.api_version_discovery' },
+    });
+    assert.equal(apiVersions.status, 'allowed');
+    assert.ok(apiVersions.evidenceId);
+    const apiVersionContent = platform.evidence.readEvidenceContent(apiVersions.evidenceId).toString('utf8');
+    assert.match(apiVersionContent, /web.api_version_discovery/);
+    assert.match(apiVersionContent, /\/api\/v1/);
+
+    const hostProbe = await platform.tools.invoke({
+      runId: run.id,
+      tool: 'scanner.run_template',
+      target: `${target.url}/profile?token=host-secret`,
+      method: 'GET',
+      riskLevel: 'R2',
+      args: { template: 'web.host_header_probe' },
+    });
+    assert.equal(hostProbe.status, 'allowed');
+    assert.ok(hostProbe.evidenceId);
+    const hostProbeContent = platform.evidence.readEvidenceContent(hostProbe.evidenceId).toString('utf8');
+    assert.match(hostProbeContent, /web.host_header_probe/);
+    assert.match(hostProbeContent, /hostReflected/);
+    assert.ok(!hostProbeContent.includes('host-secret'));
+
+    const paramProbe = await platform.tools.invoke({
+      runId: run.id,
+      tool: 'scanner.run_template',
+      target: `${target.url}/profile?token=param-secret`,
+      method: 'GET',
+      riskLevel: 'R2',
+      args: { template: 'web.param_probe' },
+    });
+    assert.equal(paramProbe.status, 'allowed');
+    assert.ok(paramProbe.evidenceId);
+    const paramProbeContent = platform.evidence.readEvidenceContent(paramProbe.evidenceId).toString('utf8');
+    assert.match(paramProbeContent, /web.param_probe/);
+    assert.match(paramProbeContent, /reflection_marker/);
+    assert.ok(!paramProbeContent.includes('param-secret'));
+
     const cookieFlags = await platform.tools.invoke({
       runId: run.id,
       tool: 'scanner.run_template',
@@ -281,6 +520,57 @@ test('ToolGateway exposes a tool catalog and scanner.run_template records templa
     assert.match(unsupported.reason, /template/i);
   } finally {
     await target.close();
+  }
+});
+
+test('web.param_probe captures active parameter reflection and parser error signals', async () => {
+  const server = createServer((request, response) => {
+    const url = new URL(request.url ?? '/', 'http://127.0.0.1');
+    const q = url.searchParams.get('q') ?? '';
+    if (q === "'") {
+      response.writeHead(500, { 'content-type': 'text/plain' });
+      response.end('SQL syntax error near unterminated string literal');
+      return;
+    }
+    response.writeHead(200, { 'content-type': 'text/plain' });
+    response.end(`search=${q}`);
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  if (!address || typeof address === 'string') {
+    throw new Error('Unable to start parameter probe target');
+  }
+  const targetUrl = `http://127.0.0.1:${address.port}/search?q=baseline`;
+  const platform = createPlatform();
+  const run = platform.graph.createRun({
+    target: targetUrl,
+    goal: 'Capture active query parameter vulnerability signals',
+    scopePolicy: {
+      ...policy,
+      allowedAssets: ['127.0.0.1'],
+      deniedAssets: [],
+    },
+    workerPool: [{ name: 'mock-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+
+  try {
+    const result = await platform.tools.invoke({
+      runId: run.id,
+      tool: 'scanner.run_template',
+      target: targetUrl,
+      method: 'GET',
+      riskLevel: 'R2',
+      args: { template: 'web.param_probe' },
+    });
+    assert.equal(result.status, 'allowed');
+    assert.ok(result.evidenceId);
+    const content = platform.evidence.readEvidenceContent(result.evidenceId).toString('utf8');
+    assert.match(content, /web.param_probe/);
+    assert.match(content, /"reflected":true/);
+    assert.match(content, /sql_error_signal/);
+    assert.match(content, /"statusDiff":true/);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
   }
 });
 
@@ -777,6 +1067,143 @@ test('Dispatcher reclaims expired intent leases and dispatches them again', asyn
   assert.equal(concluded?.claimedBy, 'recovery-worker');
 });
 
+test('Dispatcher resolves produced evidence placeholders for access comparison workflows', async () => {
+  const target = await startTargetServer();
+  const platform = createPlatform();
+  const run = platform.graph.createRun({
+    target: target.url,
+    goal: 'Execute a multi-step access differential workflow',
+    scopePolicy: {
+      ...policy,
+      allowedAssets: ['127.0.0.1'],
+      deniedAssets: [],
+    },
+    workerPool: [{ name: 'access-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+  const originFact = platform.graph.getGraph(run.id).facts[0];
+  assert.ok(originFact);
+  platform.graph.createIntent({
+    runId: run.id,
+    fromFactIds: [originFact.id],
+    hypothesis: 'Compare two produced HTTP evidence items',
+    riskLevel: 'R2',
+    createdBy: 'test',
+  });
+  const dispatcher = new Dispatcher(platform.graph, {
+    events: platform.events,
+    observability: platform.observability,
+    tools: platform.tools,
+    workerFactory: () =>
+      new StaticWorker('access-worker', async () => ({
+        accepted: true,
+        data: {
+          description: 'Compared produced baseline and comparison evidence.',
+          toolRequests: [
+            { tool: 'http.request', target: `${target.url}/viewer`, method: 'GET', riskLevel: 'R1', args: {} },
+            { tool: 'http.request', target: `${target.url}/admin`, method: 'GET', riskLevel: 'R1', args: {} },
+            {
+              tool: 'access.compare_evidence',
+              target: `${target.url}/profile`,
+              method: 'POST',
+              riskLevel: 'R2',
+              args: {
+                baselineEvidenceId: '$produced[0]',
+                comparisonEvidenceId: '$produced[1]',
+                title: 'Produced baseline versus comparison',
+              },
+            },
+          ],
+        },
+      })),
+  });
+
+  try {
+    const result = await dispatcher.dispatchOnce(run.id);
+    assert.equal(result.status, 'dispatched');
+    const accessReview = platform.accessReviews.list(run.id)[0];
+    assert.ok(accessReview);
+    assert.ok(accessReview.baselineEvidenceId);
+    assert.ok(accessReview.comparisonEvidenceId);
+    assert.notEqual(accessReview.baselineEvidenceId, accessReview.comparisonEvidenceId);
+    assert.ok(accessReview.diffEvidenceId);
+    const diffContent = platform.evidence.readEvidenceContent(accessReview.diffEvidenceId).toString('utf8');
+    assert.ok(!diffContent.includes('$produced'));
+  } finally {
+    await target.close();
+  }
+});
+
+test('Worker envelope recommends active parameter probing and credentialed access comparison workflows', async () => {
+  const platform = createPlatform();
+  const paramRun = platform.graph.createRun({
+    target: 'https://app.example.com/search?q=baseline',
+    goal: 'Recommend active parameter probing',
+    scopePolicy: policy,
+    workerPool: [{ name: 'mock-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+  platform.graph.createIntent({
+    runId: paramRun.id,
+    fromFactIds: [],
+    hypothesis: 'Map query parameter behavior',
+    riskLevel: 'R2',
+    createdBy: 'test',
+  });
+  const paramEnvelope = await platform.dispatcher.previewEnvelope(paramRun.id, 'explore');
+  assert.ok(JSON.stringify(paramEnvelope.envelope.strategyRecommendations).includes('web.param_probe'));
+
+  const credentialRun = platform.graph.createRun({
+    target: 'https://app.example.com/profile',
+    goal: 'Recommend credentialed access comparison',
+    scopePolicy: policy,
+    workerPool: [{ name: 'mock-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+  platform.graph.createIntent({
+    runId: credentialRun.id,
+    fromFactIds: [],
+    hypothesis: 'Compare anonymous and authenticated profile access',
+    riskLevel: 'R2',
+    createdBy: 'test',
+  });
+  platform.credentials.create({
+    runId: credentialRun.id,
+    label: 'Viewer account',
+    role: 'viewer',
+    kind: 'vault_reference',
+    placeholder: 'vault://agentred/viewer',
+    allowedUse: ['authenticated comparison probe'],
+  });
+  const credentialEnvelope = await platform.dispatcher.previewEnvelope(credentialRun.id, 'explore');
+  const recommendations = JSON.stringify(credentialEnvelope.envelope.strategyRecommendations);
+  assert.ok(recommendations.includes('credential.use_placeholder'));
+  assert.ok(recommendations.includes('authenticated comparison probe'));
+  assert.ok(recommendations.includes('followUpTool'));
+  assert.ok(!recommendations.includes('baselineEvidenceId'));
+
+  const baseline = platform.evidence.addEvidence({
+    runId: credentialRun.id,
+    kind: 'http_exchange',
+    redactionState: 'redacted',
+    content: JSON.stringify({
+      request: { method: 'GET', target: 'https://app.example.com/profile' },
+      response: { status: 403, bodyPreview: 'anonymous denied' },
+    }),
+  });
+  const comparison = platform.evidence.addEvidence({
+    runId: credentialRun.id,
+    kind: 'http_exchange',
+    redactionState: 'redacted',
+    content: JSON.stringify({
+      request: { method: 'GET', target: 'https://app.example.com/profile' },
+      response: { status: 200, bodyPreview: 'viewer accepted' },
+    }),
+  });
+  const comparisonEnvelope = await platform.dispatcher.previewEnvelope(credentialRun.id, 'explore');
+  const comparisonRecommendations = JSON.stringify(comparisonEnvelope.envelope.strategyRecommendations);
+  assert.ok(comparisonRecommendations.includes('access.compare_evidence'));
+  assert.ok(comparisonRecommendations.includes(baseline.id));
+  assert.ok(comparisonRecommendations.includes(comparison.id));
+});
+
 test('RunSupervisor detects expired leases, repeated blocked tools, and worker failure loops', async () => {
   const platform = createPlatform();
   const run = platform.graph.createRun({
@@ -972,6 +1399,33 @@ test('CliWorkerAdapter times out and kills long-running worker processes', async
 
   assert.equal(result.accepted, false);
   assert.match(result.reason, /timed out/i);
+});
+
+test('built-in Claude worker fails closed without API key', () => {
+  const envelope = {
+    protocolVersion: 'test',
+    role: 'explore',
+    contract: { objective: 'test', hardRules: [], toolUse: [], output: [] },
+    task: {},
+    toolSurface: {},
+    domainSkills: [],
+    credentialReferences: [],
+    pocTemplates: [],
+    toolboxBundles: [],
+    connectors: [],
+    strategyHints: [],
+    strategyRecommendations: [],
+    outputSchema: {},
+    examples: [],
+  };
+  const result = spawnSync(process.execPath, ['src/workers/claude-worker.ts', JSON.stringify(envelope)], {
+    encoding: 'utf8',
+    env: { ...process.env, ANTHROPIC_API_KEY: '' },
+  });
+  assert.notEqual(result.status, 0);
+  const rejection = JSON.parse(result.stderr.trim()) as { accepted: boolean; reason: string };
+  assert.equal(rejection.accepted, false);
+  assert.match(rejection.reason, /ANTHROPIC_API_KEY/);
 });
 
 test('REST API creates runs, records hints, returns graphs, and generates reports', async () => {
@@ -2307,6 +2761,37 @@ test('enterprise pentest scorer improves after role evidence, OAST, and high-ris
   assert.equal(scenarios.get('oast_readiness')?.status, 'pass');
   assert.equal(scenarios.get('lifecycle_readiness')?.status, 'pass');
   assert.equal(scenarios.get('ai_agent_security')?.status, 'pass');
+});
+
+test('OAST service supports local and interactsh callback URL modes without logging tokens', () => {
+  const local = createPlatform();
+  const run = local.graph.createRun({
+    target: 'https://app.example.com',
+    goal: 'Validate OAST callback URL modes',
+    scopePolicy: policy,
+    workerPool: [{ name: 'mock-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+  const localSession = local.oast.start({ runId: run.id, baseUrl: 'http://127.0.0.1:4317' });
+  assert.match(localSession.callbackUrl, /^http:\/\/127\.0\.0\.1:4317\/oast\/[a-f0-9]{32}$/);
+
+  const interactsh = new OastService(local.store, local.evidence, local.events, {
+    backend: 'interactsh',
+    interactshServer: 'oast.example',
+  });
+  const publicSession = interactsh.start({ runId: run.id });
+  assert.match(publicSession.callbackUrl, /^https:\/\/[a-f0-9]{32}\.oast\.example$/);
+  const startEvents = local.events.list(run.id).filter((event) => event.type === 'oast.session.started');
+  assert.ok(startEvents.every((event) => !event.detail?.includes(localSession.token) && !event.detail?.includes(publicSession.token)));
+
+  const callback = local.oast.recordCallback({
+    sessionId: localSession.id,
+    method: 'GET',
+    path: `/callback/${localSession.token}`,
+    source: 'test',
+  });
+  const callbackContent = local.evidence.readEvidenceContent(callback.evidenceId).toString('utf8');
+  assert.match(callbackContent, /tokenSha256/);
+  assert.ok(!callbackContent.includes(localSession.token));
 });
 
 test('scanner result import normalizes Nuclei JSONL into evidence-backed candidate findings', () => {

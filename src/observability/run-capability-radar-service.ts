@@ -125,26 +125,33 @@ export class RunCapabilityRadarService {
   }
 }
 
-function safetyDimension(run: Run, approvals: Array<{ status: string }>, tools: ToolInvocation[]): RunCapabilityDimension {
+function safetyDimension(run: Run, approvals: Array<{ id?: string; status: string }>, tools: ToolInvocation[]): RunCapabilityDimension {
   const pendingApprovals = approvals.filter((item) => item.status === 'pending').length;
-  const r4NotBlocked = tools.filter((tool) => tool.riskLevel === 'R4' && tool.status !== 'blocked').length;
+  const approvalsById = new Map(approvals.filter((item): item is { id: string; status: string } => Boolean(item.id)).map((item) => [item.id, item]));
+  const unauthorizedR4 = tools.filter(
+    (tool) => tool.riskLevel === 'R4' && tool.status === 'allowed' && (!tool.approvalId || approvalsById.get(tool.approvalId)?.status !== 'approved'),
+  ).length;
+  const approvedR4 = tools.filter(
+    (tool) => tool.riskLevel === 'R4' && tool.status === 'allowed' && Boolean(tool.approvalId && approvalsById.get(tool.approvalId)?.status === 'approved'),
+  ).length;
   const scopeBlocked = tools.filter((tool) => tool.status === 'blocked' && /scope|denied|method|asset|R4|destructive/i.test(tool.reason ?? '')).length;
-  const score = r4NotBlocked > 0 ? 0 : clamp(100 - pendingApprovals * 12);
+  const score = unauthorizedR4 > 0 ? 0 : clamp(100 - pendingApprovals * 12 - approvedR4 * 4);
   return dimension({
     id: 'scope_safety',
     title: 'Scope and safety',
     score,
-    detail: r4NotBlocked > 0
-      ? `${r4NotBlocked} destructive or R4 request(s) were not blocked.`
-      : `${scopeBlocked} out-of-policy request(s) blocked; destructiveAllowed=${run.scopePolicy.destructiveAllowed}.`,
+    detail: unauthorizedR4 > 0
+      ? `${unauthorizedR4} R4 request(s) were allowed without approved break-glass approval.`
+      : `${scopeBlocked} out-of-policy request(s) blocked; approvedR4=${approvedR4}; destructiveAllowed=${run.scopePolicy.destructiveAllowed}.`,
     signals: [
       `${pendingApprovals} pending approval(s)`,
       `${scopeBlocked} policy block(s)`,
+      `${approvedR4} approved R4 break-glass call(s)`,
       `${run.scopePolicy.allowedAssets.length} allowed asset rule(s)`,
     ],
     gaps: [
       ...(pendingApprovals > 0 ? ['Resolve pending approvals before expanding autonomous execution.'] : []),
-      ...(r4NotBlocked > 0 ? ['R4 requests must fail closed before commercial use.'] : []),
+      ...(unauthorizedR4 > 0 ? ['R4 requests must require a matching token and approved break-glass approval before execution.'] : []),
     ],
   });
 }

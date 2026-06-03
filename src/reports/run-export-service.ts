@@ -6,6 +6,7 @@ import type { FindingService } from '../findings/finding-service.js';
 import type { GraphServer } from '../graph/graph-server.js';
 import type { EvidenceQualityService } from '../observability/evidence-quality-service.js';
 import type { PlatformStore } from '../storage/store.js';
+import { redactRun } from '../security/redaction.js';
 import type { ReportFindingScope } from './report-service.js';
 
 export interface RunExportInput {
@@ -43,7 +44,7 @@ export class RunExportService {
     const bundle = {
       schema: 'run-export.v1',
       generatedAt: nowIso(),
-      run: snapshot.run,
+      run: redactRun(snapshot.run),
       graph: {
         facts: snapshot.facts,
         intents: snapshot.intents,
@@ -69,7 +70,17 @@ export class RunExportService {
       browserSessions: byRun(Object.values(this.store.state.browserSessions), input.runId),
       browserSnapshots: byRun(Object.values(this.store.state.browserSnapshots), input.runId),
       proxySessions: byRun(Object.values(this.store.state.proxySessions), input.runId),
-      oastSessions: byRun(Object.values(this.store.state.oastSessions), input.runId),
+      oastSessions: byRun(Object.values(this.store.state.oastSessions), input.runId).map((session) => ({
+        id: session.id,
+        runId: session.runId,
+        status: session.status,
+        interactionCount: session.interactionCount,
+        limitations: session.limitations,
+        createdAt: session.createdAt,
+        closedAt: session.closedAt,
+        callbackUrl: '[redacted]',
+        token: '[redacted]',
+      })),
       oastCallbacks: byRun(Object.values(this.store.state.oastCallbacks), input.runId),
       credentialReferences: byRun(Object.values(this.store.state.credentialReferences), input.runId),
       accessReviews: byRun(Object.values(this.store.state.accessReviews), input.runId),

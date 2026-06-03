@@ -168,7 +168,7 @@ export class DomainSkillReadinessService {
         'This endpoint is read-only and does not enable skills, import artifacts, run tools, approve actions, or create findings.',
         'Missing inputs are surfaced as operator work, not silently invented Worker context.',
         'Raw credentials, raw traffic, and unredacted local evidence must not be copied into skill hints.',
-        'R3 validation stays approval-gated and R4 behavior remains forbidden by default.',
+        'R3 validation stays approval-gated and R4 behavior remains denied by default unless break-glass token and approval gates pass.',
       ],
     };
   }
@@ -262,7 +262,7 @@ function highRiskWebCard(skill: RunDomainSkillView, signals: DomainSignals): Dom
     inputs,
     evidenceRequirements: ['In-scope HTTP/browser/proxy evidence.', 'Scanner/source/advisory evidence for high-risk hypothesis.', 'Human useful review before confirmed critical/high findings.'],
     allowedArtifacts: ['HTTP exchange', 'browser snapshot', 'OAST callback', 'scanner output', 'SARIF evidence', 'access-review diff'],
-    safetyGates: ['R3 approval for state-changing, OAST, or exploit validation', 'No data exfiltration', 'No destructive commands', 'R4 remains blocked'],
+    safetyGates: ['R3 approval for state-changing, OAST, or exploit validation', 'No data exfiltration', 'No destructive commands', 'R4 requires break-glass token plus approval'],
     nextActions: [
       ...(!skill.enabled ? [`Enable ${skill.name} for enterprise web runs that must prioritize high-impact classes.`] : []),
       ...(httpEvidence.length === 0 ? ['Capture focused HTTP/browser evidence before proposing high-impact web findings.'] : []),

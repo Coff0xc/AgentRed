@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 
 import { newId, nowIso } from '../domain/ids.js';
 import type { OastCallback, OastSession } from '../domain/types.js';
@@ -19,24 +19,58 @@ export interface RecordOastCallbackInput {
   remoteAddress?: string;
 }
 
+export interface OastServiceOptions {
+  /** 'local' uses the platform HTTP inbox. 'interactsh' uses a public interactsh-compatible server. */
+  backend?: 'local' | 'interactsh';
+  /** Interactsh server hostname, e.g. 'oast.pro'. Only used when backend='interactsh'. */
+  interactshServer?: string;
+}
+
 export class OastService {
+  private readonly backend: 'local' | 'interactsh';
+  private readonly interactshServer: string;
+
   constructor(
     private readonly store: PlatformStore,
     private readonly evidence: EvidenceEngine,
     private readonly events?: RunEventService,
-  ) {}
+    options: OastServiceOptions = {},
+  ) {
+    this.backend = options.backend ?? 'local';
+    this.interactshServer = options.interactshServer ?? 'oast.pro';
+  }
 
-  start(input: { runId: string; baseUrl: string }): OastSession {
+  start(input: { runId: string; baseUrl?: string }): OastSession {
     this.assertRun(input.runId);
     const token = randomBytes(16).toString('hex');
+
+    let callbackUrl: string;
+    let limitations: string[];
+
+    if (this.backend === 'interactsh') {
+      callbackUrl = `https://${token}.${this.interactshServer}`;
+      limitations = [
+        'Public interactsh-compatible callback domain',
+        'Supports HTTP and DNS out-of-band callbacks',
+        'Use R3 approval before embedding payloads in live targets',
+      ];
+    } else {
+      callbackUrl = `${(input.baseUrl ?? 'http://127.0.0.1:4317').replace(/\/$/, '')}/oast/${token}`;
+      limitations = [
+        'Local HTTP callback inbox only',
+        'No public DNS canary domain — use interactsh backend for SSRF/XXE out-of-band validation',
+        'Use R3 approval before sending payloads to targets',
+      ];
+    }
+
     const session: OastSession = {
       id: newId('oastsession'),
       runId: input.runId,
       status: 'active',
       token,
-      callbackUrl: `${input.baseUrl.replace(/\/$/, '')}/oast/${token}`,
+      callbackUrl,
       interactionCount: 0,
-      limitations: ['Local HTTP callback inbox only', 'No public DNS canary domain yet', 'Use R3 approval before sending payloads to targets'],
+      limitations,
       createdAt: nowIso(),
     };
     this.store.state.oastSessions[session.id] = session;
@@ -45,7 +79,7 @@ export class OastService {
       runId: input.runId,
       type: 'oast.session.started',
       title: 'OAST session started',
-      detail: session.callbackUrl,
+      detail: `${this.backend} backend: ${this.backend === 'interactsh' ? this.interactshServer : 'local inbox'} (token hidden)`,
       entityId: session.id,
     });
     return session;
@@ -95,10 +129,10 @@ export class OastService {
       source: input.source ?? 'callback',
       protocol: input.protocol ?? 'http',
       sessionId: session.id,
-      token: session.token,
+      tokenSha256: hashText(session.token),
       request: {
         method: input.method.toUpperCase(),
-        path: redactText(input.path),
+        path: redactOastPath(input.path, session.token),
         headers: redactHeaders(input.headers ?? {}),
         bodyPreview: input.bodyPreview ? redactText(input.bodyPreview).slice(0, 4096) : undefined,
         bodyTruncated: Boolean(input.bodyPreview && input.bodyPreview.length > 4096),
@@ -119,7 +153,7 @@ export class OastService {
       evidenceId: evidence.id,
       protocol: input.protocol ?? 'http',
       method: input.method.toUpperCase(),
-      path: redactText(input.path).slice(0, 500),
+      path: redactOastPath(input.path, session.token).slice(0, 500),
       source: input.source ?? 'callback',
       remoteAddress: input.remoteAddress,
       createdAt: timestamp,
@@ -161,4 +195,12 @@ export class OastService {
       throw new Error(`Run not found: ${runId}`);
     }
   }
+}
+
+function hashText(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+function redactOastPath(path: string, token: string): string {
+  return redactText(path.replaceAll(token, '[redacted]'));
 }

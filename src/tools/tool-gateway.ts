@@ -47,6 +47,7 @@ export interface ToolInvokeInput {
   riskLevel: RiskLevel;
   args: Record<string, unknown>;
   approvalId?: string;
+  r4AuthorizationToken?: string;
 }
 
 export type ToolInvokeResult =
@@ -159,6 +160,15 @@ interface ScannerExecutionResult {
   timedOut?: boolean;
 }
 
+interface ParamProbeResponseSample {
+  status: number;
+  bodyLength: number;
+  contentType?: string;
+  errorSignals: string[];
+  timingMs: number;
+  bodyPreview: string;
+}
+
 export class ToolGateway {
   constructor(
     private readonly store: PlatformStore,
@@ -248,6 +258,7 @@ export class ToolGateway {
       input.method,
       input.riskLevel,
       approvalResolution.status,
+      input.r4AuthorizationToken,
     );
     if (scopeDecision.action === 'approval_required') {
       gates.push({ gate: 'scope.policy', status: 'approval_required', reason: scopeDecision.reason });
@@ -363,6 +374,7 @@ export class ToolGateway {
       input.method,
       input.riskLevel,
       approvalResolution.status,
+      input.r4AuthorizationToken,
     );
 
     if (scopeDecision.action === 'approval_required') {
@@ -881,6 +893,18 @@ export class ToolGateway {
     }
     if (request.template === 'network.tls_certificate') {
       return this.executeTlsCertificateTemplate(input, toolCallId, request, template);
+    }
+    if (request.template === 'web.auth_endpoint_discovery') {
+      return this.executeAuthEndpointDiscoveryTemplate(input, toolCallId, request);
+    }
+    if (request.template === 'web.api_version_discovery') {
+      return this.executeApiVersionDiscoveryTemplate(input, toolCallId, request);
+    }
+    if (request.template === 'web.host_header_probe') {
+      return this.executeHostHeaderProbeTemplate(input, toolCallId, request, template);
+    }
+    if (request.template === 'web.param_probe') {
+      return this.executeParamProbeTemplate(input, toolCallId, request, template);
     }
     const startedAt = nowIso();
     const response = await fetch(input.target, {
@@ -1896,6 +1920,173 @@ export class ToolGateway {
     return { evidenceId: evidence.id };
   }
 
+  private async executeAuthEndpointDiscoveryTemplate(
+    input: ToolInvokeInput,
+    toolCallId: string,
+    request: ScannerTemplateRequest,
+  ): Promise<ScannerExecutionResult> {
+    const startedAt = nowIso();
+    const paths = ['/login', '/signin', '/api/auth', '/oauth/authorize', '/auth', '/sso', '/saml', '/api/login', '/api/v1/auth'];
+    const results = [];
+    for (const path of paths) {
+      const target = resolveTargetPath(input.target, path);
+      const res = await fetch(target, {
+        method: 'HEAD',
+        headers: request.headers,
+        redirect: 'manual',
+        signal: AbortSignal.timeout(request.timeoutMs),
+      });
+      results.push({
+        path,
+        target: redactUrl(target),
+        status: res.status,
+        statusText: res.statusText,
+        location: res.headers.get('location') ? redactUrl(resolveTargetPath(target, res.headers.get('location') ?? '')) : undefined,
+        wwwAuthenticate: res.headers.get('www-authenticate') ?? undefined,
+        setsCookie: Boolean(res.headers.get('set-cookie')),
+      });
+    }
+    const evidence = this.evidence.addEvidence({
+      runId: input.runId,
+      kind: 'command_output',
+      content: JSON.stringify({ tool: 'scanner.run_template', template: request.template, engine: 'builtin', profileId: 'builtin.web', target: redactUrl(input.target), method: 'HEAD', results, startedAt, endedAt: nowIso() }),
+      redactionState: 'redacted',
+      toolCallId,
+    });
+    return { evidenceId: evidence.id };
+  }
+
+  private async executeApiVersionDiscoveryTemplate(
+    input: ToolInvokeInput,
+    toolCallId: string,
+    request: ScannerTemplateRequest,
+  ): Promise<ScannerExecutionResult> {
+    const startedAt = nowIso();
+    const paths = ['/v1', '/v2', '/v3', '/api/v1', '/api/v2', '/api/v3', '/rest/v1', '/rest/v2', '/api/v1.0', '/api/v2.0'];
+    const results = [];
+    for (const path of paths) {
+      const target = resolveTargetPath(input.target, path);
+      const res = await fetch(target, {
+        method: 'HEAD',
+        headers: request.headers,
+        redirect: 'manual',
+        signal: AbortSignal.timeout(request.timeoutMs),
+      });
+      results.push({ path, target: redactUrl(target), status: res.status, statusText: res.statusText, contentType: res.headers.get('content-type') ?? undefined });
+    }
+    const evidence = this.evidence.addEvidence({
+      runId: input.runId,
+      kind: 'command_output',
+      content: JSON.stringify({ tool: 'scanner.run_template', template: request.template, engine: 'builtin', profileId: 'builtin.web', target: redactUrl(input.target), method: 'HEAD', results, startedAt, endedAt: nowIso() }),
+      redactionState: 'redacted',
+      toolCallId,
+    });
+    return { evidenceId: evidence.id };
+  }
+
+  private async executeHostHeaderProbeTemplate(
+    input: ToolInvokeInput,
+    toolCallId: string,
+    request: ScannerTemplateRequest,
+    template?: ToolTemplateProfile,
+  ): Promise<ScannerExecutionResult> {
+    const startedAt = nowIso();
+    const baseline = await fetch(input.target, { method: 'GET', headers: request.headers, signal: AbortSignal.timeout(request.timeoutMs) });
+    const baselineBody = await baseline.text();
+    const results: unknown[] = [{ probe: 'baseline', status: baseline.status, bodyLength: baselineBody.length, bodyPreview: redactText(baselineBody).slice(0, 512) }];
+    for (const syntheticHost of ['evil.example.com', '127.0.0.1']) {
+      const res = await fetch(input.target, { method: 'GET', headers: { ...request.headers, host: syntheticHost }, signal: AbortSignal.timeout(request.timeoutMs) });
+      const body = await res.text();
+      results.push({
+        probe: syntheticHost,
+        status: res.status,
+        bodyLength: body.length,
+        bodyPreview: redactText(body).slice(0, 512),
+        differential: { statusDiff: res.status !== baseline.status, bodyLengthDiff: Math.abs(body.length - baselineBody.length) > 100, hostReflected: body.toLowerCase().includes(syntheticHost.toLowerCase()) },
+      });
+    }
+    const evidence = this.evidence.addEvidence({
+      runId: input.runId,
+      kind: 'command_output',
+      content: JSON.stringify({ tool: 'scanner.run_template', template: request.template, engine: template?.engine ?? 'builtin', profileId: template?.profileId ?? 'builtin.web', target: redactUrl(input.target), method: 'GET', results, startedAt, endedAt: nowIso() }),
+      redactionState: 'redacted',
+      toolCallId,
+    });
+    return { evidenceId: evidence.id };
+  }
+
+  private async executeParamProbeTemplate(
+    input: ToolInvokeInput,
+    toolCallId: string,
+    request: ScannerTemplateRequest,
+    template?: ToolTemplateProfile,
+  ): Promise<ScannerExecutionResult> {
+    const startedAt = nowIso();
+    const baselineStartedMs = Date.now();
+    const baseline = await fetch(input.target, {
+      method: 'GET',
+      headers: request.headers,
+      redirect: 'manual',
+      signal: AbortSignal.timeout(request.timeoutMs),
+    });
+    const baselineBody = await baseline.text();
+    const baselineSample = responseSample(baseline.status, baseline.headers, baselineBody, Date.now() - baselineStartedMs);
+    const parameters = queryParameterNames(input.target).slice(0, 8);
+    const probes: Array<Record<string, unknown>> = [];
+
+    for (const parameter of parameters) {
+      for (const probe of PARAMETER_PROBES) {
+        const target = mutateQueryParameter(input.target, parameter, probe.value);
+        const probeStartedMs = Date.now();
+        const response = await fetch(target, {
+          method: 'GET',
+          headers: request.headers,
+          redirect: 'manual',
+          signal: AbortSignal.timeout(request.timeoutMs),
+        });
+        const body = await response.text();
+        const elapsedMs = Date.now() - probeStartedMs;
+        probes.push({
+          parameter,
+          probe: probe.id,
+          target: redactUrl(target),
+          status: response.status,
+          statusDiff: response.status !== baselineSample.status,
+          bodyLength: body.length,
+          bodyLengthDiff: Math.abs(body.length - baselineSample.bodyLength),
+          contentType: response.headers.get('content-type') ?? undefined,
+          reflected: body.includes(probe.value),
+          errorSignals: detectWebErrorSignals(body),
+          timingMs: elapsedMs,
+          timingDiffMs: elapsedMs - baselineSample.timingMs,
+          bodyPreview: redactText(body).slice(0, 512),
+        });
+      }
+    }
+
+    const evidence = this.evidence.addEvidence({
+      runId: input.runId,
+      kind: 'command_output',
+      content: JSON.stringify({
+        tool: 'scanner.run_template',
+        template: request.template,
+        engine: template?.engine ?? 'builtin',
+        profileId: template?.profileId ?? 'builtin.web',
+        target: redactUrl(input.target),
+        method: 'GET',
+        parameterCount: parameters.length,
+        skipped: parameters.length === 0 ? 'Target URL has no query parameters to mutate' : undefined,
+        baseline: baselineSample,
+        probes,
+        startedAt,
+        endedAt: nowIso(),
+      }),
+      redactionState: 'redacted',
+      toolCallId,
+    });
+    return { evidenceId: evidence.id };
+  }
+
   private finishTool<T extends ToolInvokeResult>(
     input: ToolInvokeInput,
     result: T,
@@ -2088,6 +2279,12 @@ const SECURITY_HEADERS = [
   'strict-transport-security',
 ];
 
+const PARAMETER_PROBES = [
+  { id: 'reflection_marker', value: 'agentred-param-marker-7f3b' },
+  { id: 'single_quote', value: "'" },
+  { id: 'timing_hint', value: '1 AND 1=1' },
+];
+
 function parseFindingProposalRequest(runId: string, args: Record<string, unknown>): ProposeFindingInput {
   return {
     runId,
@@ -2139,6 +2336,41 @@ function parseScannerTemplateRequest(args: Record<string, unknown>): ScannerTemp
 function resolveTargetPath(target: string, path: string): string {
   const url = new URL(target);
   return `${url.origin}${path}`;
+}
+
+function queryParameterNames(target: string): string[] {
+  try {
+    return [...new Set(Array.from(new URL(target).searchParams.keys()).filter(Boolean))];
+  } catch {
+    return [];
+  }
+}
+
+function mutateQueryParameter(target: string, parameter: string, value: string): string {
+  const url = new URL(target);
+  url.searchParams.set(parameter, value);
+  return url.toString();
+}
+
+function responseSample(status: number, headers: Headers, body: string, timingMs: number): ParamProbeResponseSample {
+  return {
+    status,
+    bodyLength: body.length,
+    contentType: headers.get('content-type') ?? undefined,
+    errorSignals: detectWebErrorSignals(body),
+    timingMs,
+    bodyPreview: redactText(body).slice(0, 512),
+  };
+}
+
+function detectWebErrorSignals(body: string): string[] {
+  const lower = body.toLowerCase();
+  return [
+    /\bsql syntax\b|\bmysql\b|\bpostgresql\b|\bsqlite\b|\boracle error\b|\bodbc\b/i.test(body) ? 'sql_error_signal' : undefined,
+    lower.includes('stack trace') || lower.includes('traceback') || lower.includes('exception') ? 'stack_trace_signal' : undefined,
+    lower.includes('invalid input') || lower.includes('unterminated') || lower.includes('syntax error') ? 'input_parser_error_signal' : undefined,
+    lower.includes('typeerror') || lower.includes('referenceerror') || lower.includes('null pointer') ? 'runtime_error_signal' : undefined,
+  ].filter((item): item is string => Boolean(item));
 }
 
 async function resolveDnsRecords(host: string): Promise<Record<string, unknown>> {

@@ -11,6 +11,7 @@ export function evaluateScope(
   method: string,
   riskLevel: RiskLevel,
   approvalStatus?: ApprovalStatus,
+  r4AuthorizationToken?: string,
 ): ScopeDecision {
   const normalizedMethod = method.toUpperCase();
   const normalizedTarget = normalizeTarget(target);
@@ -19,16 +20,25 @@ export function evaluateScope(
     return { action: 'deny', reason: `HTTP method ${normalizedMethod} is not allowed by scope policy` };
   }
 
-  if (riskLevel === 'R4') {
-    return { action: 'deny', reason: 'R4 actions are prohibited by default' };
-  }
-
   if (policy.deniedAssets.some((asset) => assetMatches(asset, normalizedTarget))) {
     return { action: 'deny', reason: `${normalizedTarget} is explicitly denied by scope policy` };
   }
 
   if (!policy.allowedAssets.some((asset) => assetMatches(asset, normalizedTarget))) {
     return { action: 'deny', reason: `${normalizedTarget} is outside the authorized scope` };
+  }
+
+  if (riskLevel === 'R4') {
+    if (!policy.r4AuthorizationToken) {
+      return { action: 'deny', reason: 'R4 actions are prohibited by default' };
+    }
+    if (r4AuthorizationToken !== policy.r4AuthorizationToken) {
+      return { action: 'deny', reason: 'R4 action requires the matching scope authorization token' };
+    }
+    if (approvalStatus !== 'approved') {
+      return { action: 'approval_required', reason: 'R4 action requires matching scope authorization token and explicit human approval' };
+    }
+    return { action: 'allow', reason: 'R4 allowed by matching scope authorization token and approved request' };
   }
 
   if (riskLevel === 'R3' && approvalStatus !== 'approved') {

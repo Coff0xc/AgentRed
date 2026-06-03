@@ -1,6 +1,7 @@
 import { toolCatalog } from '../tools/toolbox-registry.js';
 import { strategyHintsForWorker } from '../strategy/strategy-service.js';
 import type { WorkerTask } from './types.js';
+import { redactRun } from '../security/redaction.js';
 
 export interface WorkerProtocolEnvelope {
   protocolVersion: 'agent-worker.v1';
@@ -25,6 +26,7 @@ export interface WorkerProtocolEnvelope {
 }
 
 export function buildWorkerProtocolEnvelope(task: WorkerTask): WorkerProtocolEnvelope {
+  const safeTask = redactWorkerTask(task);
   return {
     protocolVersion: 'agent-worker.v1',
     role: 'agentred-worker',
@@ -61,7 +63,7 @@ export function buildWorkerProtocolEnvelope(task: WorkerTask): WorkerProtocolEnv
         'On uncertainty or refusal, return {"accepted":false,"reason":"..."}',
       ],
     },
-    task,
+    task: safeTask,
     toolSurface: toolCatalog(),
     domainSkills: task.domainSkills ?? [],
     credentialReferences: task.credentialReferences ?? [],
@@ -75,10 +77,18 @@ export function buildWorkerProtocolEnvelope(task: WorkerTask): WorkerProtocolEnv
       ...toolboxBundleHints(task),
       ...connectorHints(task),
     ],
-    strategyRecommendations: workerStrategyRecommendations(task),
+    strategyRecommendations: workerStrategyRecommendations(safeTask),
     outputSchema: workerOutputSchema(),
     examples: workerExamples(),
   };
+}
+
+function redactWorkerTask(task: WorkerTask): WorkerTask {
+  const graph = { ...task.graph, run: redactRun(task.graph.run) };
+  if (task.type === 'explore') {
+    return { ...task, graph };
+  }
+  return { ...task, graph };
 }
 
 function toolboxBundleHints(task: WorkerTask): string[] {
@@ -111,6 +121,51 @@ function workerStrategyRecommendations(task: WorkerTask): Array<Record<string, u
   }
   const target = task.graph.run.target;
   const evidence = task.graph.evidence.filter((item) => item.kind !== 'replay_bundle');
+  const credential = task.credentialReferences?.find((item) => item.status === 'active');
+  if (credential && evidence.length >= 2) {
+    const [baseline, comparison] = evidence.slice(-2);
+    return [
+      {
+        title: 'Compare existing anonymous and credentialed evidence before proposing auth impact',
+        toolRequests: [
+          {
+            tool: 'access.compare_evidence',
+            target,
+            method: 'POST',
+            riskLevel: 'R2',
+            args: {
+              baselineEvidenceId: baseline.id,
+              comparisonEvidenceId: comparison.id,
+              comparisonCredentialId: credential.id,
+              title: 'Anonymous versus credentialed access differential',
+            },
+          },
+        ],
+      },
+    ];
+  }
+  if (credential) {
+    return [
+      {
+        title: 'Prepare anonymous and credentialed access evidence before auth-impact comparison',
+        toolRequests: [
+          { tool: 'http.request', target, method: 'GET', riskLevel: 'R1', args: { timeoutMs: 10_000 } },
+          {
+            tool: 'credential.use_placeholder',
+            target,
+            method: 'GET',
+            riskLevel: 'R1',
+            args: { credentialId: credential.id, usedFor: 'authenticated comparison probe' },
+          },
+        ],
+        operatorSteps: [
+          'Capture the credentialed HTTP/browser/proxy evidence using the referenced credential outside the Worker prompt.',
+          'Run access.compare_evidence only after both anonymous and credentialed response evidence ids exist.',
+        ],
+        followUpTool: 'access.compare_evidence',
+      },
+    ];
+  }
   if (evidence.length === 0) {
     return [
       {
@@ -130,6 +185,13 @@ function workerStrategyRecommendations(task: WorkerTask): Array<Record<string, u
             method: 'GET',
             riskLevel: 'R1',
             args: { template: 'web.link_form_map', timeoutMs: 10_000 },
+          },
+          {
+            tool: 'scanner.run_template',
+            target,
+            method: 'GET',
+            riskLevel: 'R2',
+            args: { template: 'web.param_probe', timeoutMs: 10_000 },
           },
         ],
       },

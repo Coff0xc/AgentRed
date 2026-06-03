@@ -160,6 +160,8 @@ export interface ScopePolicy {
   rateLimits: {
     requestsPerMinute: number;
   };
+  /** Optional run-scoped break-glass secret. Matching callers still need scope match and human approval before R4 can execute. */
+  r4AuthorizationToken?: string;
 }
 
 export interface WorkerConfig {

@@ -173,7 +173,7 @@ export class LocalExecutionNodeService {
         workerRuntimeCard(workers.length, healthyWorkers),
         sessionRuntimeCard('browser', 'Browser controller', browserSessions, 'HTTP fetch controller; full desktop browser automation and DOM execution are future node capabilities.'),
         sessionRuntimeCard('proxy', 'HTTP proxy capture', proxySessions, 'Absolute-form HTTP capture exists; TLS MITM and local CA management are future desktop capabilities.'),
-        sessionRuntimeCard('oast', 'OAST callback inbox', oastSessions, 'Local HTTP callbacks exist; public DNS canary infrastructure remains a future node capability.'),
+        sessionRuntimeCard('oast', 'OAST callback inbox', oastSessions, 'Local HTTP callbacks exist; interactsh-compatible public callback URLs can be configured, while relay polling remains future work.'),
         bundleRuntimeCard(bundles.length, bundles.filter((bundle) => bundle.runtimeStatus === 'available').length, enabledToolboxBundles.length),
         connectorRuntimeCard(enabledConnectors.length),
       ],

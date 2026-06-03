@@ -46,7 +46,7 @@ export const DOMAIN_SKILLS: DomainSkill[] = [
     ],
     riskNotes: [
       'Aggressive means high-impact prioritization inside ROE, not bypassing scope, approvals, or redaction.',
-      'R4 behaviors remain blocked even when this skill is enabled.',
+      'R4 behaviors remain denied by default even when this skill is enabled; break-glass execution still needs scope token and approval.',
     ],
     references: ['PentestGPT benchmark discipline', 'Z3r0 controlled penetration engineer role', 'Burp/ZAP high-impact workflow'],
   },

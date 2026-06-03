@@ -2553,7 +2553,7 @@ The same capability is available through the Tool Gateway as `browser.navigate`:
 
 ## OAST Callback Inbox
 
-The local OAST inbox is the contract for out-of-band validation evidence. It is local HTTP only today; public DNS canary domains and tunnel integrations belong to the later desktop/cloud execution layer.
+The OAST inbox is the contract for out-of-band validation evidence. The default backend is local HTTP. An explicitly configured interactsh-compatible backend can generate `https://<token>.<server>` callback URLs for public HTTP/DNS validation, but the platform still records only callbacks that are delivered to it and does not poll the public relay in this version.
 
 ```http
 POST /runs/{id}/oast-sessions
@@ -2775,7 +2775,7 @@ Use this endpoint for desktop approval panels, strategy recommendation previews,
 
 ## POST /runs/{id}/tools
 
-Invokes a high-level tool through the Tool Gateway. The gateway enforces scope, method policy, risk gates, rate limits, and tool allowlisting before execution.
+Invokes a high-level tool through the Tool Gateway. The gateway enforces scope, method policy, risk gates, rate limits, and tool allowlisting before execution. `R4` requests are denied by default; break-glass R4 execution requires an in-scope target, a matching `r4AuthorizationToken` in the request, and an approved approval id for the same run, tool, target, and risk level. The break-glass token is internal-only after validation and is redacted from run, graph, review, Worker envelope, and export responses.
 
 ```json
 {
@@ -2828,6 +2828,10 @@ Current built-in templates:
 - `web.openapi_discovery`: checks bounded same-origin OpenAPI/Swagger metadata paths and stores redacted spec previews without executing API operations.
 - `web.oauth_oidc_metadata`: checks OAuth/OIDC well-known metadata without credential material, authorization flows, token requests, refresh, or revocation calls.
 - `web.graphql_introspection_plan`: probes bounded GraphQL endpoint hints and produces an approval-aware plan without sending introspection queries or mutations.
+- `web.auth_endpoint_discovery`: checks common login, SSO, SAML, OAuth, and auth API paths with bounded `HEAD` requests.
+- `web.api_version_discovery`: checks common API version paths such as `/v1`, `/api/v2`, and `/rest/v1`.
+- `web.host_header_probe`: compares baseline and synthetic Host-header responses for host-reflection and differential signals.
+- `web.param_probe`: mutates existing query parameters with bounded marker, quote, and timing-hint values and stores redacted reflection, error, status, length, and timing differential signals.
 - `network.dns_records`: resolves bounded public DNS record types for the in-scope host without zone transfer.
 - `network.tls_certificate`: performs one TLS handshake and stores certificate metadata without sending HTTP data or intercepting TLS.
 

@@ -294,7 +294,7 @@ function harnessEvalPlan(run: Run, signals: RunHarnessSignals, inventory: Harnes
         'External execution requires both global enablement and template allowlist membership.',
         'Blocked invocations produce audit records and do not create fake evidence.',
       ],
-      safetyGates: ['R2 work must match ScopePolicy.', 'R3 remains approval-gated.', 'R4 remains forbidden unless explicitly redesigned.'],
+      safetyGates: ['R2 work must match ScopePolicy.', 'R3 remains approval-gated.', 'R4 defaults to deny and requires matching break-glass token plus approval.'],
       expectedArtifacts: ['runtime activation plan', 'blocked/allowed tool audit', 'toolbox readiness record'],
       blockers: [],
     }),
@@ -434,7 +434,7 @@ function harnessEvalPlan(run: Run, signals: RunHarnessSignals, inventory: Harnes
     acceptanceGates: [
       'Scope violation must remain zero.',
       'Finding creation requires same-run evidence.',
-      'R3 actions require human approval and R4 actions are forbidden by default.',
+      'R3 actions require human approval and R4 actions are denied by default unless break-glass token and approval gates both pass.',
       'Worker output is advisory until parsed and accepted by Dispatcher-owned services.',
       'Evidence redaction and SHA-256 integrity must be present before commercial delivery.',
     ],

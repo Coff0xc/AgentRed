@@ -27,7 +27,7 @@ import type {
   ValidationState,
   WorkerConfig,
 } from '../domain/types.js';
-import { redactHeaders, redactText, redactUrl } from '../security/redaction.js';
+import { redactHeaders, redactRun, redactText, redactUrl } from '../security/redaction.js';
 import { evaluateScope } from '../scope/policy.js';
 import { normalizeProgramScope } from '../scope/program-scope-import.js';
 import type { ReportFindingScope } from '../reports/report-service.js';
@@ -265,7 +265,7 @@ async function route(
   if (method === 'GET' && url.pathname === '/runs') {
     const runs = Object.values(platform.store.state.runs)
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
-      .map((run) => ({ ...run, progress: platform.events.progress(run.id) }));
+      .map((run) => ({ ...redactRun(run), progress: platform.events.progress(run.id) }));
     sendJson(response, 200, runs);
     return;
   }
@@ -405,7 +405,7 @@ async function route(
   if (method === 'POST' && url.pathname === '/runs') {
     const input = validateCreateRun(await readJson(request));
     const run = platform.graph.createRun(input);
-    sendJson(response, 201, run);
+    sendJson(response, 201, redactRun(run));
     return;
   }
 
@@ -476,7 +476,8 @@ async function route(
   }
 
   if (method === 'GET' && pathParts[0] === 'runs' && pathParts[2] === 'graph') {
-    sendJson(response, 200, platform.graph.getGraph(pathParts[1]));
+    const graph = platform.graph.getGraph(pathParts[1]);
+    sendJson(response, 200, { ...graph, run: redactRun(graph.run) });
     return;
   }
 
@@ -1642,7 +1643,7 @@ function getRunReview(platform: Platform, runId: string) {
   const evidenceReviews = platform.evidenceReviews.list(runId);
   const observability = platform.observability.summary(runId);
   return {
-    run: graph.run,
+    run: redactRun(graph.run),
     progress,
     approvals,
     toolInvocations,
@@ -2099,6 +2100,7 @@ function validateToolInvoke(runId: string, input: unknown): ToolInvokeInput {
     riskLevel: validateRiskLevel(object.riskLevel),
     args: object.args === undefined ? {} : asRecord(object.args, 'args'),
     approvalId: optionalString(object.approvalId, 'approvalId'),
+    r4AuthorizationToken: optionalString(object.r4AuthorizationToken, 'r4AuthorizationToken'),
   };
 }
 
@@ -2783,6 +2785,7 @@ function validateScopePolicy(input: unknown): ScopePolicy {
     destructiveAllowed: object.destructiveAllowed,
     credentialRules: { allowVaultReferencesOnly: credentialRules.allowVaultReferencesOnly },
     rateLimits: { requestsPerMinute: rateLimits.requestsPerMinute },
+    r4AuthorizationToken: optionalString(object.r4AuthorizationToken, 'scopePolicy.r4AuthorizationToken'),
   };
 }
 

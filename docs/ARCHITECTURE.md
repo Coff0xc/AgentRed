@@ -167,7 +167,7 @@ Human review can move a finding between `candidate`, `confirmed`, and `rejected`
 
 Search Frontier actions are first-party control-plane actions, not Worker powers. `plan` previews the same Tool Gateway decision path used by scanner and strategy previews. `intent` turns a frontier item into a normal Dispatcher-owned intent. `invoke` can run only mapped high-level requests such as `scanner.run_template`, `http.request`, or evidence-backed `finding.propose`, and those requests still pass through normal scope, approval, audit, redaction, and evidence gates.
 
-Built-in scanner templates are the safe bridge toward HexStrike/AutoRedTeam-style tool breadth. The platform currently exposes web baseline, client-side browser-policy, modern Web exposure, API/auth metadata, redirect/cache policy, DNS, and TLS metadata templates as first-party `scanner.run_template` actions. External engines such as nuclei, ffuf, httpx, sqlmap, nmap, semgrep, apktool, and Frida remain metadata/profile-backed and fail closed until a governed runtime profile and allowlist are enabled.
+Built-in scanner templates are the safe bridge toward HexStrike/AutoRedTeam-style tool breadth. The platform currently exposes web baseline, bounded query-parameter probing, client-side browser-policy, modern Web exposure, API/auth metadata, redirect/cache policy, DNS, and TLS metadata templates as first-party `scanner.run_template` actions. External engines such as nuclei, ffuf, httpx, sqlmap, nmap, semgrep, apktool, and Frida remain metadata/profile-backed and fail closed until a governed runtime profile and allowlist are enabled.
 
 ## Dispatcher Model
 
@@ -191,7 +191,7 @@ Explore dispatch uses intent leases:
 - worker rejection, timeout, or missing conclusion moves the intent to `released` with `releaseReason`.
 - valid heartbeats extend the lease; stale lease IDs are rejected.
 
-The mock worker demonstrates the contract. Real worker adapters can wrap Claude Code, Codex, Gemini CLI, Kimi CLI, or a custom executable that returns the same JSON shape.
+The mock worker demonstrates the contract. Real worker adapters can wrap Claude Code, Codex, Gemini CLI, Kimi CLI, or a custom executable that returns the same JSON shape. A built-in Claude API worker is available for `type: "claude"` when no custom command is configured; it requires `ANTHROPIC_API_KEY`, optional `CLAUDE_MODEL`, and the operator-installed `@anthropic-ai/sdk` package.
 
 The generic CLI adapter:
 
@@ -347,7 +347,7 @@ Built-in connector presets intentionally cover more than one tool family: HexStr
 
 `POST /runs/{id}/tools/plan` is the operator-facing dry-run path for Tool Gateway decisions. It previews support, scope, approval binding, shell allowlist, scanner template registration, toolbox profile/policy readiness, rate-limit state, evidence policy, and audit side effects without writing state or executing a tool. This gives the desktop/web UI a visible decision trail before an operator approves or runs a template.
 
-`scanner.run_template` is the first concrete scanner-template path. Built-in web templates now cover security headers, endpoint discovery, technology fingerprinting, cookie flag and scope review, link/form mapping, security.txt policy, CORS/CSP/JavaScript asset inventory, WebSocket discovery planning, source-map exposure planning, redirect and cache policy, OpenAPI discovery, OAuth/OIDC metadata, and GraphQL introspection planning. Built-in network templates cover bounded DNS record snapshots and TLS certificate metadata. External templates register nuclei, ffuf, httpx, sqlmap, nmap, tlsx, semgrep, apktool, and Frida behind toolbox profiles instead of exposing those engines directly. The Toolbox Runner builds a scoped execution plan, verifies policy/profile readiness, runs the command without a shell in an ephemeral local tool-run directory, and stores redacted stdout/stderr as evidence.
+`scanner.run_template` is the first concrete scanner-template path. Built-in web templates now cover security headers, endpoint discovery, active query-parameter probing, technology fingerprinting, cookie flag and scope review, link/form mapping, security.txt policy, CORS/CSP/JavaScript asset inventory, WebSocket discovery planning, source-map exposure planning, redirect and cache policy, OpenAPI discovery, OAuth/OIDC metadata, auth endpoint discovery, API version discovery, host-header probing, and GraphQL introspection planning. Built-in network templates cover bounded DNS record snapshots and TLS certificate metadata. External templates register nuclei, ffuf, httpx, sqlmap, nmap, tlsx, semgrep, apktool, and Frida behind toolbox profiles instead of exposing those engines directly. The Toolbox Runner builds a scoped execution plan, verifies policy/profile readiness, runs the command without a shell in an ephemeral local tool-run directory, and stores redacted stdout/stderr as evidence.
 
 Future adapters should map high-level tools to concrete engines. The LLM-facing surface should stay small:
 

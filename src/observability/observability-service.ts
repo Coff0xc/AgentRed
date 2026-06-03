@@ -189,18 +189,21 @@ export class ObservabilityService {
       finding.evidenceIds.some((id) => evidenceById.get(id)?.redactionState === 'raw_local_only'),
     );
     const scopeBlocked = tools.filter((tool) => tool.status === 'blocked' && /scope|denied|method|asset/i.test(tool.reason ?? ''));
-    const r4NotBlocked = tools.filter((tool) => tool.riskLevel === 'R4' && tool.status !== 'blocked');
+    const approvalsById = new Map(Object.values(this.store.state.approvals).filter((item) => item.runId === runId).map((item) => [item.id, item]));
+    const unauthorizedR4 = tools.filter(
+      (tool) => tool.riskLevel === 'R4' && tool.status === 'allowed' && (!tool.approvalId || approvalsById.get(tool.approvalId)?.status !== 'approved'),
+    );
     const candidateFindings = findings.filter((finding) => finding.validationState === 'candidate');
 
     return [
       check(
         'scope_controls',
         'Scope and destructive-action controls',
-        r4NotBlocked.length === 0 ? 'pass' : 'fail',
-        r4NotBlocked.length === 0
+        unauthorizedR4.length === 0 ? 'pass' : 'fail',
+        unauthorizedR4.length === 0
           ? `Scope gate active; ${scopeBlocked.length} out-of-policy tool requests were blocked.`
-          : `${r4NotBlocked.length} R4 tool requests were not blocked.`,
-        r4NotBlocked.length,
+          : `${unauthorizedR4.length} R4 tool requests were allowed without approved break-glass approval.`,
+        unauthorizedR4.length,
       ),
       check(
         'evidence_backed_findings',

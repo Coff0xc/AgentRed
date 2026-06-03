@@ -709,14 +709,20 @@ function unique(values: string[]): string[] {
 }
 
 function resolveProducedEvidenceReference(request: WorkerToolRequest, producedEvidenceIds: string[]): WorkerToolRequest {
-  if (request.tool !== 'finding.propose' || producedEvidenceIds.length === 0) {
+  if (producedEvidenceIds.length === 0) {
     return request;
   }
   const args = request.args ?? {};
+  if (request.tool === 'access.compare_evidence') {
+    return { ...request, args: replaceProducedEvidencePlaceholders(args, producedEvidenceIds) };
+  }
+  if (request.tool !== 'finding.propose') {
+    return request;
+  }
   const existingEvidenceIds = Array.isArray(args.evidenceIds) ? args.evidenceIds : [];
   const hasProducedPlaceholder = existingEvidenceIds.some((item) => item === '$produced');
   const expandedEvidenceIds = existingEvidenceIds.flatMap((item) =>
-    item === '$produced' ? producedEvidenceIds : typeof item === 'string' ? [item] : [],
+    item === '$produced' ? producedEvidenceIds : typeof item === 'string' ? [resolveProducedEvidencePlaceholder(item, producedEvidenceIds) ?? item] : [],
   );
   const shouldUseProduced = args.useProducedEvidence === true || hasProducedPlaceholder;
   if (!shouldUseProduced) {
@@ -731,6 +737,26 @@ function resolveProducedEvidenceReference(request: WorkerToolRequest, producedEv
       evidenceIds: [...new Set(finalEvidenceIds.length > 0 ? finalEvidenceIds : producedEvidenceIds)],
     },
   };
+}
+
+function replaceProducedEvidencePlaceholders(args: Record<string, unknown>, producedEvidenceIds: string[]): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(args).map(([key, value]) => [
+      key,
+      typeof value === 'string' ? (resolveProducedEvidencePlaceholder(value, producedEvidenceIds) ?? value) : value,
+    ]),
+  );
+}
+
+function resolveProducedEvidencePlaceholder(value: string, producedEvidenceIds: string[]): string | undefined {
+  if (value === '$produced') {
+    return producedEvidenceIds.at(-1);
+  }
+  const match = value.match(/^\$produced\[(\d+)\]$/);
+  if (!match) {
+    return undefined;
+  }
+  return producedEvidenceIds[Number(match[1])];
 }
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {

@@ -386,7 +386,7 @@ function commercialGuardrailDimension(pendingApprovals: number, blockedToolCalls
       ...(pendingApprovals > 0 ? ['Pending approvals must be decided before higher-risk work continues.'] : []),
       ...(deliveryStatus !== 'ready' ? ['Delivery readiness is not fully ready for customer-facing handoff.'] : []),
     ],
-    nextActions: ['Keep R3 human-approved and R4 denied by default; use blocked calls as backlog evidence.'],
+    nextActions: ['Keep R3 human-approved and R4 denied by default unless break-glass token plus approval gates pass; use blocked calls as backlog evidence.'],
   });
 }
 

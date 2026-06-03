@@ -237,7 +237,7 @@ High-level tools currently exposed through policy gates:
 | `oast.record_callback` | Redacted OAST callback evidence. |
 | `finding.propose` | Evidence-backed candidate finding proposal. |
 
-Built-in scanner templates include web security headers, endpoint discovery, technology fingerprinting, cookie flags, CORS/CSP analysis, JavaScript asset inventory, OpenAPI/OAuth discovery, GraphQL introspection planning, DNS records, and TLS certificate capture.
+Built-in scanner templates include web security headers, endpoint discovery, auth endpoint discovery, API version discovery, host header probing, query parameter probing, technology fingerprinting, cookie flags, CORS/CSP analysis, JavaScript asset inventory, OpenAPI/OAuth discovery, GraphQL introspection planning, DNS records, and TLS certificate capture.
 
 External templates such as nuclei, ffuf, httpx, sqlmap, nmap, tlsx, semgrep, apktool, and Frida are registered for planning and readiness visibility. They fail closed unless the required runtime profile and explicit policy gates are enabled.
 
@@ -269,7 +269,7 @@ Risk levels:
 | `R1` | Ordinary HTTP/browser action, allowed only when in scope. |
 | `R2` | Scanning or bounded fuzzing, allowed only when policy and scope match. |
 | `R3` | Exploit validation, OAST, state-changing checks, or cross-role auth tests. Requires explicit approval. |
-| `R4` | Destructive, credential theft, persistence, data exfiltration, brute force, or out-of-scope behavior. Blocked by default. |
+| `R4` | Destructive, credential theft, persistence, data exfiltration, brute force, or out-of-scope behavior. Blocked by default; break-glass use requires matching scope token plus approval. |
 
 Fail-closed behavior:
 
@@ -277,7 +277,8 @@ Fail-closed behavior:
 - Out-of-scope targets are blocked before execution or capture storage.
 - Unsupported tools and unsupported HTTP methods are blocked.
 - R3 actions require approval bound to the same run, tool, target, and risk level.
-- R4 actions remain blocked even with approval.
+- R4 actions remain blocked unless the run has a matching break-glass scope token, the request submits that token, scope/method gates pass, and a matching human approval is approved.
+- Break-glass R4 tokens stay internal: API run/graph/review responses, Worker envelopes, and run exports redact them.
 - Tool invocations and approval records store redacted targets and arguments.
 - Secret-looking Worker environment values are rejected from `workerPool.env`.
 - Findings without same-run evidence are rejected.
@@ -297,6 +298,8 @@ See [docs/SECURITY_MODEL.md](docs/SECURITY_MODEL.md) for the detailed model.
 | `OPENAI_API_KEY` | unset | Provider key for future or CLI Worker integrations; keep it in the API process environment. |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Optional OpenAI-compatible base URL. |
 | `OPENAI_MODEL` | `gpt-4.1-mini` | Optional default model value for Worker integrations. |
+| `ANTHROPIC_API_KEY` | unset | Enables the built-in Claude Worker adapter when `type: "claude"` is used without a custom command. |
+| `CLAUDE_MODEL` | `claude-sonnet-4-5` | Optional model override for the built-in Claude Worker adapter. |
 | `PLATFORM_ALLOW_EXTERNAL_TOOLBOX` | `0` | Enables external scanner execution only when set to `1`. |
 | `PLATFORM_ALLOWED_SCANNER_TEMPLATES` | empty | Comma-separated external template allowlist; `*` allows all registered external templates. |
 | `PLATFORM_ENABLE_CONTAINER_TOOLBOX` | `0` | Enables container toolbox profile probing. |
@@ -385,7 +388,7 @@ AgentRed is currently a platform kernel, not a finished hosted product. The foll
 - TLS MITM proxy with local CA management
 - Real browser automation with JavaScript execution
 - Default-on Docker/Podman external toolbox execution
-- Public OAST DNS/HTTP relay
+- Full public OAST relay polling and tenant-retention controls
 - Cloud tenant, RBAC, SSO, billing, and redacted sync
 - Production-grade relational storage and migrations
 
@@ -606,11 +609,11 @@ bootstrap -> reason -> explore -> reason -> ... -> completed
 | `shell.run_sandboxed` | 通过 allowlist 限制的 shell 命令执行。 |
 | `credential.use_placeholder` | 审计化的占位凭据使用，不存 raw secret。 |
 | `access.compare_evidence` | 同一 Run 内的访问差异证据复核。 |
-| `oast.start_session` | 本地 OAST 会话计划和审批流程。 |
+| `oast.start_session` | 本地或显式配置的 interactsh-compatible OAST 会话计划和审批流程。 |
 | `oast.record_callback` | 脱敏后的 OAST callback 证据。 |
 | `finding.propose` | 基于证据提出候选 Finding。 |
 
-内置扫描模板包括 Web 安全头、端点发现、技术指纹、Cookie flags、CORS/CSP 分析、JavaScript 资产清单、OpenAPI/OAuth 发现、GraphQL introspection plan、DNS records 和 TLS certificate capture。
+内置扫描模板包括 Web 安全头、端点发现、认证端点发现、API 版本发现、Host header 探测、查询参数主动探测、技术指纹、Cookie flags、CORS/CSP 分析、JavaScript 资产清单、OpenAPI/OAuth 发现、GraphQL introspection plan、DNS records 和 TLS certificate capture。
 
 nuclei、ffuf、httpx、sqlmap、nmap、tlsx、semgrep、apktool、Frida 等外部模板目前用于计划和 readiness 展示。只有当运行时 profile 和显式策略门禁都满足时才允许执行，否则默认阻断。
 
@@ -642,7 +645,7 @@ nuclei、ffuf、httpx、sqlmap、nmap、tlsx、semgrep、apktool、Frida 等外�
 | `R1` | 普通 HTTP/browser 动作，必须在授权范围内。 |
 | `R2` | 扫描或有限 fuzzing，必须满足策略和范围。 |
 | `R3` | Exploit validation、OAST、状态变更检查或跨角色认证测试，需要显式审批。 |
-| `R4` | 破坏性动作、凭据窃取、持久化、数据外传、暴力破解或越权行为，默认阻断。 |
+| `R4` | 破坏性动作、凭据窃取、持久化、数据外传、暴力破解或越权行为，默认阻断；break-glass 使用需要匹配 scope token 和审批。 |
 
 Fail-closed 行为：
 
@@ -650,7 +653,8 @@ Fail-closed 行为：
 - 越权目标在执行或采集存储前被阻断。
 - 不支持的工具和不允许的 HTTP 方法会被阻断。
 - R3 动作需要绑定同一 Run、tool、target 和 risk level 的审批。
-- R4 即使有审批也保持阻断。
+- R4 默认阻断；只有 Run 配置了匹配 break-glass scope token、请求提交该 token、范围/方法门禁通过且审批通过时才允许。
+- Break-glass R4 token 只保留在内部门控路径；API 的 run/graph/review 响应、Worker envelope 和 run export 都会脱敏。
 - 工具调用和审批记录只保存脱敏后的目标和参数。
 - `workerPool.env` 中疑似 secret 的值会被拒绝。
 - 没有同 Run 证据的 Finding 会被拒绝。
@@ -758,7 +762,7 @@ AgentRed 目前是平台内核，不是完整托管产品。以下仍在路线�
 - TLS MITM proxy 和本地 CA 生命周期
 - 带 JavaScript 执行能力的真实浏览器自动化
 - 默认开启的 Docker/Podman 外部 toolbox 执行
-- Public OAST DNS/HTTP relay
+- 完整 Public OAST relay 轮询和租户保留控制
 - Cloud tenant、RBAC、SSO、billing 和 redacted sync
 - 生产级关系型存储和迁移
 

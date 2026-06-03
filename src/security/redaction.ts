@@ -52,6 +52,17 @@ export function isSensitiveName(name: string): boolean {
   return SENSITIVE_NAME_PATTERN.test(name);
 }
 
+export function redactScopePolicy<T extends { r4AuthorizationToken?: string }>(policy: T): T {
+  if (!policy.r4AuthorizationToken) {
+    return { ...policy };
+  }
+  return { ...policy, r4AuthorizationToken: '[redacted]' };
+}
+
+export function redactRun<T extends { scopePolicy: { r4AuthorizationToken?: string } }>(run: T): T {
+  return { ...run, scopePolicy: redactScopePolicy(run.scopePolicy) };
+}
+
 function redactValue(key: string, value: unknown): unknown {
   if (isSensitiveName(key)) {
     return '[redacted]';
