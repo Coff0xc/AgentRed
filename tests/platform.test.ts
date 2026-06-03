@@ -745,6 +745,109 @@ test('Dispatcher reclaims expired intent leases and dispatches them again', asyn
   assert.equal(concluded?.claimedBy, 'recovery-worker');
 });
 
+test('RunSupervisor detects expired leases, repeated blocked tools, and worker failure loops', async () => {
+  const platform = createPlatform();
+  const run = platform.graph.createRun({
+    target: 'https://app.example.com',
+    goal: 'Detect stuck autonomous execution',
+    scopePolicy: policy,
+    workerPool: [{ name: 'unstable-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+  const intent = platform.graph.createIntent({
+    runId: run.id,
+    fromFactIds: [],
+    hypothesis: 'Expired worker lease should be supervised',
+    riskLevel: 'R1',
+    createdBy: 'test',
+  });
+  platform.graph.claimIntent(intent.id, 'unstable-worker', 60_000);
+  platform.store.state.intents[intent.id].leaseExpiresAt = '2000-01-01T00:00:00.000Z';
+  await platform.tools.invoke({
+    runId: run.id,
+    tool: 'nmap.raw',
+    target: 'https://app.example.com',
+    method: 'GET',
+    riskLevel: 'R2',
+    args: {},
+  });
+  await platform.tools.invoke({
+    runId: run.id,
+    tool: 'nmap.raw',
+    target: 'https://app.example.com',
+    method: 'GET',
+    riskLevel: 'R2',
+    args: {},
+  });
+  platform.store.state.traceSpans.supervisor_timeout = {
+    id: 'supervisor_timeout',
+    runId: run.id,
+    kind: 'worker',
+    name: 'unstable-worker.explore',
+    status: 'timeout',
+    startedAt: '2026-06-03T00:00:00.000Z',
+    endedAt: '2026-06-03T00:00:10.000Z',
+    durationMs: 10_000,
+    attributes: { worker: 'unstable-worker', task: 'explore' },
+  };
+  platform.store.state.traceSpans.supervisor_error = {
+    id: 'supervisor_error',
+    runId: run.id,
+    kind: 'worker',
+    name: 'unstable-worker.reason',
+    status: 'error',
+    startedAt: '2026-06-03T00:00:11.000Z',
+    endedAt: '2026-06-03T00:00:12.000Z',
+    durationMs: 1_000,
+    attributes: { worker: 'unstable-worker', task: 'reason' },
+  };
+
+  const report = platform.supervisor.get(run.id, new Date('2026-06-03T00:01:00.000Z'));
+
+  assert.equal(report.mode, 'run_supervisor');
+  assert.equal(report.posture, 'stuck');
+  assert.equal(report.counts.expiredClaimedIntents, 1);
+  assert.equal(report.counts.repeatedBlockedTools, 2);
+  assert.equal(report.counts.workerTimeouts, 1);
+  assert.equal(report.counts.workerErrors, 1);
+  assert.ok(report.signals.some((item) => item.id === 'expired_leases' && item.severity === 'critical'));
+  assert.ok(report.signals.some((item) => item.id === 'repeated_blocked_tools'));
+  assert.ok(report.actions.some((item) => item.kind === 'release_expired_leases' && item.safeToAutomate));
+  assert.ok(report.stuckWorkers.some((item) => item.worker === 'unstable-worker' && item.recommendation.includes('Deprioritize')));
+  assert.equal(report.audit.dispatchesWorkers, false);
+  assert.equal(report.audit.invokesTools, false);
+});
+
+test('RunSupervisor tick only releases expired leases without dispatching work', () => {
+  const platform = createPlatform();
+  const run = platform.graph.createRun({
+    target: 'https://app.example.com',
+    goal: 'Release stale lease without dispatch',
+    scopePolicy: policy,
+    workerPool: [{ name: 'mock-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+  const intent = platform.graph.createIntent({
+    runId: run.id,
+    fromFactIds: [],
+    hypothesis: 'Supervisor should release this lease',
+    riskLevel: 'R1',
+    createdBy: 'test',
+  });
+  platform.graph.claimIntent(intent.id, 'stale-worker', 60_000);
+  platform.store.state.intents[intent.id].leaseExpiresAt = '2000-01-01T00:00:00.000Z';
+
+  const tick = platform.supervisor.tick(run.id, new Date('2026-06-03T00:01:00.000Z'));
+
+  assert.equal(tick.mode, 'run_supervisor_tick');
+  assert.equal(tick.releasedExpiredIntents.length, 1);
+  assert.equal(tick.before.counts.expiredClaimedIntents, 1);
+  assert.equal(tick.after.counts.expiredClaimedIntents, 0);
+  assert.equal(tick.audit.dispatchesWorkers, false);
+  assert.equal(tick.audit.invokesTools, false);
+  const released = platform.graph.getGraph(run.id).intents.find((item) => item.id === intent.id);
+  assert.equal(released?.status, 'open');
+  assert.match(released?.releaseReason ?? '', /Lease expired/i);
+});
+
 test('GraphServer heartbeats extend active intent leases and reject stale leases', () => {
   const platform = createPlatform();
   const run = platform.graph.createRun({
@@ -1058,6 +1161,69 @@ test('REST API exposes run observability summary and quality evaluations', async
     assert.equal(reviewResponse.status, 200);
     const review = (await reviewResponse.json()) as { observability: { latestEvaluation: { score: number } } };
     assert.equal(review.observability.latestEvaluation.score, evaluation.score);
+  } finally {
+    await api.close();
+  }
+});
+
+test('REST API exposes mature reference benchmarks as roadmap signals', async () => {
+  const platform = createPlatform();
+  const api = await startApiServer(platform, { port: 0, authToken: 'test-token' });
+  const authHeaders = { authorization: 'Bearer test-token', 'content-type': 'application/json' };
+  try {
+    const createResponse = await fetch(`${api.url}/runs`, {
+      method: 'POST',
+      headers: authHeaders,
+      body: JSON.stringify({
+        target: 'https://app.example.com',
+        goal: 'Benchmark product maturity against mature reference projects',
+        scopePolicy: policy,
+        workerPool: [{ name: 'mock-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+      }),
+    });
+    assert.equal(createResponse.status, 201);
+    const run = (await createResponse.json()) as { id: string };
+
+    const benchmarkResponse = await fetch(`${api.url}/runs/${run.id}/reference-benchmark`, {
+      headers: { authorization: 'Bearer test-token' },
+    });
+    assert.equal(benchmarkResponse.status, 200);
+    const benchmark = (await benchmarkResponse.json()) as {
+      counts: { referenceProjects: number; dimensions: number };
+      dimensions: Array<{ id: string; referenceProjects: string[]; nextActions: string[] }>;
+      projects: Array<{ id: string; name: string }>;
+      nextActions: string[];
+    };
+
+    assert.ok(benchmark.counts.dimensions >= 14);
+    assert.ok(benchmark.counts.referenceProjects >= 11);
+    assert.ok(benchmark.dimensions.some((item) => item.id === 'browser_proxy_dast' && item.referenceProjects.includes('OWASP ZAP')));
+    assert.ok(
+      benchmark.dimensions.some(
+        (item) => item.id === 'scanner_template_ecosystem' && item.referenceProjects.includes('ProjectDiscovery Nuclei'),
+      ),
+    );
+    assert.ok(
+      benchmark.dimensions.some(
+        (item) => item.id === 'vulnerability_lifecycle' && item.referenceProjects.includes('OWASP DefectDojo'),
+      ),
+    );
+    assert.ok(
+      benchmark.dimensions.some(
+        (item) => item.id === 'agent_runtime_eval' && item.referenceProjects.includes('Microsoft PyRIT'),
+      ),
+    );
+    assert.ok(
+      benchmark.projects.some(
+        (project) => project.id === 'zap_burp_playwright' && /Playwright/.test(project.name),
+      ),
+    );
+    assert.ok(
+      benchmark.projects.some(
+        (project) => project.id === 'defectdojo_faraday_dradis' && /DefectDojo/.test(project.name),
+      ),
+    );
+    assert.ok(benchmark.nextActions.some((action) => /relational tables|Playwright|adapter|scorer|Finding-style/.test(action)));
   } finally {
     await api.close();
   }
@@ -1744,6 +1910,400 @@ test('REST API heartbeats claimed intent leases', async () => {
   } finally {
     await api.close();
   }
+});
+
+test('REST API exposes supervisor report and safe stale-lease tick', async () => {
+  const platform = createPlatform();
+  const run = platform.graph.createRun({
+    target: 'https://app.example.com',
+    goal: 'Inspect supervisor through API',
+    scopePolicy: policy,
+    workerPool: [{ name: 'api-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+  const intent = platform.graph.createIntent({
+    runId: run.id,
+    fromFactIds: [],
+    hypothesis: 'API supervisor lease',
+    riskLevel: 'R1',
+    createdBy: 'test',
+  });
+  platform.graph.claimIntent(intent.id, 'api-worker', 60_000);
+  platform.store.state.intents[intent.id].leaseExpiresAt = '2000-01-01T00:00:00.000Z';
+  const api = await startApiServer(platform, { port: 0, authToken: 'test-token' });
+  const headers = { authorization: 'Bearer test-token', 'content-type': 'application/json' };
+  try {
+    const reportResponse = await fetch(`${api.url}/runs/${run.id}/supervisor`, { headers });
+    assert.equal(reportResponse.status, 200);
+    const report = (await reportResponse.json()) as {
+      mode: string;
+      posture: string;
+      counts: { expiredClaimedIntents: number };
+      audit: { dispatchesWorkers: boolean };
+    };
+    assert.equal(report.mode, 'run_supervisor');
+    assert.equal(report.posture, 'stuck');
+    assert.equal(report.counts.expiredClaimedIntents, 1);
+    assert.equal(report.audit.dispatchesWorkers, false);
+
+    const tickResponse = await fetch(`${api.url}/runs/${run.id}/supervisor/tick`, {
+      method: 'POST',
+      headers,
+    });
+    assert.equal(tickResponse.status, 200);
+    const tick = (await tickResponse.json()) as {
+      mode: string;
+      releasedExpiredIntents: Array<{ id: string }>;
+      audit: { dispatchesWorkers: boolean; invokesTools: boolean };
+    };
+    assert.equal(tick.mode, 'run_supervisor_tick');
+    assert.deepEqual(
+      tick.releasedExpiredIntents.map((item) => item.id),
+      [intent.id],
+    );
+    assert.equal(tick.audit.dispatchesWorkers, false);
+    assert.equal(tick.audit.invokesTools, false);
+  } finally {
+    await api.close();
+  }
+});
+
+test('enterprise pentest skills and evidence templates cover high-risk workflows without granting raw tool authority', async () => {
+  const platform = createPlatform();
+  const skillIds = new Set(platform.skills.list().map((skill) => skill.id));
+  for (const skillId of [
+    'web.high-risk-triage',
+    'web.browser-proxy-runner',
+    'api.authz-workflow',
+    'api.graphql-oauth-review',
+    'cloud.k8s-container-posture',
+    'supply-chain.sca-secrets',
+    'network.external-surface-baseline',
+    'ai.agent-infra-security',
+  ]) {
+    assert.ok(skillIds.has(skillId), `missing enterprise skill ${skillId}`);
+  }
+
+  const templateIds = new Set(platform.pocs.list().map((template) => template.id));
+  for (const templateId of [
+    'auth.multi-tenant-bypass',
+    'api.graphql-field-authz',
+    'oauth.oidc-flow-review',
+    'web.ssrf-impact-triage',
+    'web.rce-deserialization-triage',
+    'web.file-upload-path-traversal',
+    'web.injection-impact-triage',
+    'secrets.exposure-review',
+    'cloud.storage-public-exposure',
+    'container.k8s-rbac-risk',
+    'supply-chain.sbom-vulnerable-component',
+    'network.exposed-service-risk',
+    'ai.prompt-tool-injection',
+  ]) {
+    assert.ok(templateIds.has(templateId), `missing enterprise template ${templateId}`);
+  }
+
+  const run = platform.graph.createRun({
+    target: 'https://app.example.com',
+    goal: 'Aggressive authorized enterprise pentest for high-risk vulnerabilities',
+    scopePolicy: policy,
+    workerPool: [{ name: 'mock-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+  platform.skills.enable(run.id, 'api.authz-workflow');
+  platform.skills.enable(run.id, 'web.high-risk-triage');
+  platform.pocs.enable(run.id, 'auth.multi-tenant-bypass');
+  platform.pocs.enable(run.id, 'web.rce-deserialization-triage');
+
+  const workerSkills = platform.skills.workerContext(run.id);
+  assert.deepEqual(new Set(workerSkills.map((skill) => skill.id)), new Set(['api.authz-workflow', 'web.high-risk-triage']));
+  assert.match(workerSkills.flatMap((skill) => skill.workerHints).join('\n'), /high-impact|authorization/i);
+
+  const workerTemplates = platform.pocs.workerContext(run.id);
+  assert.deepEqual(
+    workerTemplates.map((template) => template.id),
+    ['auth.multi-tenant-bypass', 'web.rce-deserialization-triage'],
+  );
+  assert.match(workerTemplates.flatMap((template) => template.vulnerabilityClasses).join('\n'), /Broken Access Control|RCE/i);
+
+  const rawTool = await platform.tools.invoke({
+    runId: run.id,
+    tool: 'sqlmap.raw',
+    target: 'https://app.example.com/profile',
+    method: 'GET',
+    riskLevel: 'R2',
+    args: {},
+  });
+  assert.equal(rawTool.status, 'blocked');
+  assert.match(rawTool.reason, /unsupported/i);
+});
+
+test('strategy recommendations prioritize enabled enterprise high-risk templates', () => {
+  const platform = createPlatform();
+  const run = platform.graph.createRun({
+    target: 'https://app.example.com',
+    goal: 'Aggressive authorized enterprise pentest strategy',
+    scopePolicy: policy,
+    workerPool: [{ name: 'mock-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+  platform.pocs.enable(run.id, 'auth.multi-tenant-bypass');
+  platform.pocs.enable(run.id, 'api.graphql-field-authz');
+  platform.pocs.enable(run.id, 'oauth.oidc-flow-review');
+  platform.pocs.enable(run.id, 'web.ssrf-impact-triage');
+  platform.pocs.enable(run.id, 'web.rce-deserialization-triage');
+  platform.pocs.enable(run.id, 'web.injection-impact-triage');
+  platform.pocs.enable(run.id, 'network.exposed-service-risk');
+  const strategy = platform.strategy.getBrief(run.id);
+  const recommendationIds = strategy.recommendations.map((item) => item.id);
+  assert.ok(recommendationIds.includes('poc.auth.multi-tenant-bypass.credentials'));
+  assert.ok(recommendationIds.includes('poc.api.graphql-field-authz.scanner.web.graphql_introspection_plan'));
+  assert.ok(recommendationIds.includes('poc.oauth.oidc-flow-review.scanner.web.oauth_oidc_metadata'));
+  assert.ok(recommendationIds.includes('poc.web.ssrf-impact-triage.oast.start_session'));
+  assert.ok(recommendationIds.includes('poc.web.rce-deserialization-triage.scanner.web.nuclei.safe_templates'));
+  assert.ok(recommendationIds.includes('poc.web.injection-impact-triage.scanner.web.sqlmap.verify'));
+  assert.ok(recommendationIds.includes('poc.network.exposed-service-risk.scanner.network.nmap.safe_top_ports'));
+  assert.ok(strategy.workerHints.some((hint) => /tenant-boundary|GraphQL|OAuth|callback evidence|RCE|injection/i.test(hint)));
+});
+
+test('enterprise pentest scorer grades high-risk coverage and missing proof loops', async () => {
+  const platform = createPlatform();
+  const run = platform.graph.createRun({
+    target: 'https://app.example.com',
+    goal: 'Score aggressive enterprise pentest readiness',
+    scopePolicy: policy,
+    workerPool: [{ name: 'mock-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+  platform.skills.enable(run.id, 'api.authz-workflow');
+  platform.skills.enable(run.id, 'web.high-risk-triage');
+  platform.pocs.enable(run.id, 'auth.multi-tenant-bypass');
+  platform.pocs.enable(run.id, 'api.graphql-field-authz');
+  platform.pocs.enable(run.id, 'web.ssrf-impact-triage');
+  platform.pocs.enable(run.id, 'web.rce-deserialization-triage');
+  platform.pocs.enable(run.id, 'web.injection-impact-triage');
+  platform.pocs.enable(run.id, 'network.exposed-service-risk');
+
+  const rawTool = await platform.tools.invoke({
+    runId: run.id,
+    tool: 'nmap.raw',
+    target: 'https://app.example.com',
+    method: 'GET',
+    riskLevel: 'R2',
+    args: {},
+  });
+  assert.equal(rawTool.status, 'blocked');
+
+  const report = platform.enterprisePentestScorer.get(run.id);
+  const scenarios = new Map(report.scenarios.map((item) => [item.id, item]));
+  assert.equal(report.mode, 'enterprise_pentest_scorer');
+  assert.equal(report.audit.readOnly, true);
+  assert.equal(report.audit.invokesTools, false);
+  assert.equal(report.counts.enabledHighRiskTemplates, 6);
+  assert.ok(report.counts.highRiskRecommendations >= 6);
+  assert.equal(report.counts.blockedUnsafeTools, 1);
+  assert.equal(scenarios.get('scope_safety')?.status, 'pass');
+  assert.equal(scenarios.get('tool_validity')?.status, 'pass');
+  assert.equal(scenarios.get('high_risk_bias')?.status, 'pass');
+  assert.equal(scenarios.get('evidence_quality')?.status, 'fail');
+  assert.equal(scenarios.get('authz_depth')?.status, 'fail');
+  assert.ok(scenarios.get('authz_depth')?.gaps.some((gap) => /credential/i.test(gap)));
+  assert.equal(scenarios.get('oast_readiness')?.status, 'warn');
+  assert.ok(scenarios.get('lifecycle_readiness')?.gaps.some((gap) => /No high or critical/i.test(gap)));
+});
+
+test('enterprise pentest scorer improves after role evidence, OAST, and high-risk finding lifecycle', async () => {
+  const platform = createPlatform();
+  const run = platform.graph.createRun({
+    target: 'https://app.example.com',
+    goal: 'Improve scorer with enterprise pentest evidence',
+    scopePolicy: policy,
+    workerPool: [{ name: 'mock-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+  platform.skills.enable(run.id, 'api.authz-workflow');
+  platform.skills.enable(run.id, 'web.browser-proxy-runner');
+  platform.skills.enable(run.id, 'ai.agent-infra-security');
+  platform.pocs.enable(run.id, 'auth.multi-tenant-bypass');
+  platform.pocs.enable(run.id, 'web.ssrf-impact-triage');
+  platform.pocs.enable(run.id, 'ai.prompt-tool-injection');
+
+  platform.browserSessions.start({ runId: run.id, startUrl: 'https://app.example.com' });
+  platform.proxySessions.start({ runId: run.id, proxyUrl: 'http://127.0.0.1:4317' });
+  const viewer = platform.credentials.create({
+    runId: run.id,
+    label: 'Viewer account',
+    role: 'viewer',
+    kind: 'vault_reference',
+    placeholder: 'vault://agentred/viewer',
+    allowedUse: ['role-diff evidence'],
+  });
+  const admin = platform.credentials.create({
+    runId: run.id,
+    label: 'Admin account',
+    role: 'admin',
+    kind: 'vault_reference',
+    placeholder: 'vault://agentred/admin',
+    allowedUse: ['role-diff evidence'],
+  });
+  const baseline = platform.evidence.addEvidence({
+    runId: run.id,
+    kind: 'http_exchange',
+    redactionState: 'redacted',
+    content: JSON.stringify({
+      request: { method: 'GET', target: 'https://app.example.com/profile' },
+      response: { status: 403, headers: { role: 'viewer' }, bodyPreview: 'viewer cannot see tenant admin billing data' },
+    }),
+  });
+  const comparison = platform.evidence.addEvidence({
+    runId: run.id,
+    kind: 'http_exchange',
+    redactionState: 'redacted',
+    content: JSON.stringify({
+      request: { method: 'GET', target: 'https://app.example.com/profile' },
+      response: { status: 200, headers: { role: 'admin' }, bodyPreview: 'admin can see tenant admin billing data and invoice exports' },
+    }),
+  });
+  platform.evidenceReviews.review({ evidenceId: baseline.id, status: 'useful', reviewer: 'test' });
+  platform.evidenceReviews.review({ evidenceId: comparison.id, status: 'useful', reviewer: 'test' });
+  const accessDiff = platform.accessReviews.compareEvidence({
+    runId: run.id,
+    title: 'Viewer versus admin tenant profile',
+    target: 'https://app.example.com/profile',
+    method: 'GET',
+    baselineCredentialId: viewer.id,
+    comparisonCredentialId: admin.id,
+    baselineEvidenceId: baseline.id,
+    comparisonEvidenceId: comparison.id,
+  });
+  platform.evidenceReviews.review({ evidenceId: accessDiff.diffEvidenceId, status: 'useful', reviewer: 'test' });
+  const oastSession = platform.oast.start({ runId: run.id, baseUrl: 'http://127.0.0.1:4317' });
+  const callback = platform.oast.recordCallback({
+    sessionId: oastSession.id,
+    method: 'GET',
+    path: '/oast/callback',
+    source: 'lab',
+  });
+  platform.evidenceReviews.review({ evidenceId: callback.evidenceId, status: 'useful', reviewer: 'test' });
+  const aiEvidence = platform.evidence.addEvidence({
+    runId: run.id,
+    kind: 'command_output',
+    redactionState: 'redacted',
+    content: 'promptfoo PyRIT prompt tool injection eval evidence: tool call blocked and MCP exposure reviewed',
+  });
+  platform.evidenceReviews.review({ evidenceId: aiEvidence.id, status: 'useful', reviewer: 'test' });
+  const finding = platform.findings.proposeFinding({
+    runId: run.id,
+    title: 'High-risk tenant authorization bypass',
+    severity: 'high',
+    confidence: 'likely',
+    affectedAssets: ['https://app.example.com/profile'],
+    evidenceIds: [accessDiff.diffEvidenceId, callback.evidenceId],
+    reproSteps: ['Review the role differential evidence and callback artifact.'],
+    impact: 'A tenant boundary failure can expose high-value cross-tenant data.',
+    remediation: 'Enforce object-level authorization on every tenant-scoped access path.',
+  });
+  platform.findings.updateValidationState(finding.id, 'confirmed');
+  platform.reports.generate({ runId: run.id, format: 'enterprise' });
+
+  const report = platform.enterprisePentestScorer.get(run.id);
+  const scenarios = new Map(report.scenarios.map((item) => [item.id, item]));
+  assert.ok(report.score >= 70);
+  assert.equal(report.counts.confirmedHighOrCriticalFindings, 1);
+  assert.equal(scenarios.get('browser_proxy_runner')?.status, 'pass');
+  assert.equal(scenarios.get('evidence_quality')?.status, 'pass');
+  assert.equal(scenarios.get('authz_depth')?.status, 'pass');
+  assert.equal(scenarios.get('oast_readiness')?.status, 'pass');
+  assert.equal(scenarios.get('lifecycle_readiness')?.status, 'pass');
+  assert.equal(scenarios.get('ai_agent_security')?.status, 'pass');
+});
+
+test('vulnerability lifecycle flags duplicate high-risk candidates before validation', () => {
+  const platform = createPlatform();
+  const run = platform.graph.createRun({
+    target: 'https://app.example.com',
+    goal: 'Track high-risk lifecycle triage',
+    scopePolicy: policy,
+    workerPool: [{ name: 'mock-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+  const evidence = platform.evidence.addEvidence({
+    runId: run.id,
+    kind: 'http_exchange',
+    redactionState: 'redacted',
+    content: JSON.stringify({
+      request: { method: 'GET', target: 'https://app.example.com/admin/billing' },
+      response: { status: 200, bodyPreview: 'viewer saw tenant invoice export metadata' },
+    }),
+  });
+  platform.evidenceReviews.review({ evidenceId: evidence.id, status: 'useful', reviewer: 'test' });
+  const input = {
+    runId: run.id,
+    title: 'Tenant billing authorization bypass',
+    severity: 'high' as const,
+    confidence: 'likely' as const,
+    affectedAssets: ['https://app.example.com/admin/billing'],
+    evidenceIds: [evidence.id],
+    reproSteps: ['Review the captured in-scope HTTP exchange.'],
+    impact: 'Cross-tenant invoice metadata can be exposed to a lower-privilege user.',
+    remediation: 'Enforce tenant-scoped authorization before returning billing data.',
+  };
+  const first = platform.findings.proposeFinding(input);
+  const second = platform.findings.proposeFinding(input);
+
+  const report = platform.vulnerabilityLifecycle.get(run.id);
+  const lanes = new Map(report.lanes.map((item) => [item.id, item]));
+  assert.equal(report.mode, 'vulnerability_lifecycle');
+  assert.equal(report.posture, 'needs_evidence');
+  assert.equal(report.counts.highOrCritical, 2);
+  assert.equal(report.counts.confirmedHighOrCritical, 0);
+  assert.equal(report.counts.duplicateGroups, 1);
+  assert.equal(report.duplicateGroups[0].findingIds.length, 2);
+  assert.ok(report.duplicateGroups[0].findingIds.includes(first.id));
+  assert.ok(report.duplicateGroups[0].findingIds.includes(second.id));
+  assert.equal(lanes.get('validation_dedup')?.status, 'warn');
+  assert.ok(report.findings.some((item) => item.phase === 'validation' && item.nextActions.some((action) => /Confirm/i.test(action))));
+  assert.equal(report.audit.readsRawEvidence, false);
+});
+
+test('vulnerability lifecycle reaches retest readiness after confirmed report and export', () => {
+  const platform = createPlatform();
+  const run = platform.graph.createRun({
+    target: 'https://app.example.com',
+    goal: 'Close the high-risk vulnerability lifecycle',
+    scopePolicy: policy,
+    workerPool: [{ name: 'mock-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+  const evidence = platform.evidence.addEvidence({
+    runId: run.id,
+    kind: 'http_exchange',
+    redactionState: 'redacted',
+    content: JSON.stringify({
+      request: { method: 'GET', target: 'https://app.example.com/profile' },
+      response: { status: 200, bodyPreview: 'admin-only tenant object returned to lower role' },
+    }),
+  });
+  platform.evidenceReviews.review({ evidenceId: evidence.id, status: 'useful', reviewer: 'test' });
+  const finding = platform.findings.proposeFinding({
+    runId: run.id,
+    title: 'High-risk tenant object authorization bypass',
+    severity: 'critical',
+    confidence: 'likely',
+    affectedAssets: ['https://app.example.com/profile'],
+    evidenceIds: [evidence.id],
+    reproSteps: ['Replay the captured GET request inside the authorized test scope.'],
+    impact: 'A lower-privilege user can retrieve high-value tenant data.',
+    remediation: 'Check object ownership and role before every tenant object read.',
+  });
+  platform.findings.updateValidationState(finding.id, 'confirmed');
+  platform.reports.generate({ runId: run.id, format: 'enterprise' });
+  platform.runExports.generate({ runId: run.id, findingScope: 'confirmed_only' });
+
+  const report = platform.vulnerabilityLifecycle.get(run.id);
+  const lanes = new Map(report.lanes.map((item) => [item.id, item]));
+  assert.equal(report.posture, 'ready');
+  assert.equal(report.counts.confirmedHighOrCriticalDeliveryReady, 1);
+  assert.equal(report.counts.confirmedOnlyExports, 1);
+  assert.equal(lanes.get('delivery')?.status, 'pass');
+  assert.equal(lanes.get('retest')?.status, 'pass');
+  assert.equal(report.findings[0].phase, 'retest');
+  assert.ok(report.nextActions.some((action) => /retest/i.test(action)));
+  assert.equal(report.audit.generatesReports, false);
+  assert.equal(report.audit.invokesTools, false);
 });
 
 class StaticWorker implements WorkerAdapter {

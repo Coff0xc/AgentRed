@@ -195,6 +195,58 @@ This endpoint is read-only. It does not dispatch Workers, invoke tools, approve 
 }
 ```
 
+## GET /runs/{id}/supervisor
+
+Returns a run-level stuck-loop supervisor report. It detects expired Worker leases, pending approvals, repeated blocked tool patterns, Worker timeout/error loops, and runs with no evidence and no queued work.
+
+This endpoint is read-only. It does not dispatch Workers, invoke tools, approve actions, mutate the graph, or release leases.
+
+```json
+{
+  "mode": "run_supervisor",
+  "posture": "stuck",
+  "summary": "1 expired lease(s), 0 pending approval(s), 1 timeout(s), 1 worker error(s), 2 repeated blocked tool call(s).",
+  "counts": {
+    "expiredClaimedIntents": 1,
+    "pendingApprovals": 0,
+    "repeatedBlockedTools": 2,
+    "workerTimeouts": 1,
+    "workerErrors": 1
+  },
+  "signals": [{ "id": "expired_leases", "severity": "critical" }],
+  "actions": [
+    {
+      "kind": "release_expired_leases",
+      "endpoint": "/runs/{id}/supervisor/tick",
+      "safeToAutomate": true
+    }
+  ],
+  "audit": {
+    "readOnly": true,
+    "dispatchesWorkers": false,
+    "invokesTools": false,
+    "releasesExpiredLeases": false
+  }
+}
+```
+
+## POST /runs/{id}/supervisor/tick
+
+Runs one safe supervisor recovery tick. It only releases expired claimed intent leases by calling the graph lease recovery path, then returns the before/after supervisor counts. It does not dispatch the released work, run tools, approve actions, or mutate anything else.
+
+```json
+{
+  "mode": "run_supervisor_tick",
+  "releasedExpiredIntents": [{ "id": "intent_x", "releaseReason": "Lease expired for worker" }],
+  "audit": {
+    "dispatchesWorkers": false,
+    "invokesTools": false,
+    "approvesActions": false,
+    "releasesExpiredLeases": true
+  }
+}
+```
+
 ## GET /runs/{id}/runtime-operations-workbench
 
 Returns the run-level Runtime Operations Workbench. This is the Z3r0-inspired operator surface for runtime event projection, session/resume posture, interrupt-safe gates, sandbox/local-surface binding, background-job readiness, and frontend-safe activity feeds.
@@ -515,17 +567,17 @@ The endpoint never executes raw tools directly. It first stops for pending appro
 
 ## GET /skills
 
-Returns the static Domain Skill registry. These are narrow expert modules, not generic pentest flow stages.
+Returns the static Domain Skill registry. These are narrow expert modules, not generic pentest flow stages. The registry now includes aggressive enterprise assessment modules for high-risk web triage, browser/proxy runner workflow, API authorization, GraphQL/OAuth, cloud/Kubernetes/container posture, supply chain/secrets, external surface baseline, AI-agent infrastructure security, mobile, SAST, identity, and reporting.
 
 ```json
 [
   {
-    "id": "mobile.android-apk",
-    "name": "Android APK Assessment",
-    "category": "mobile",
+    "id": "web.high-risk-triage",
+    "name": "Aggressive Web High-Risk Triage",
+    "category": "web",
     "status": "ready",
-    "recommendedTools": ["android.manifest.import", "scanner.run_template:mobile.apk.manifest"],
-    "requiredToolboxProfiles": []
+    "recommendedTools": ["http.request", "browser.navigate", "scanner.run_template", "access.compare_evidence"],
+    "requiredToolboxProfiles": ["builtin.web"]
   }
 ]
 ```
@@ -545,7 +597,7 @@ This endpoint does not enable Skills, import artifacts, run tools, approve actio
   "mode": "domain_skill_readiness",
   "posture": "usable",
   "counts": {
-    "skills": 7,
+    "skills": 15,
     "enabledSkills": 1,
     "domainArtifacts": 2,
     "domainEvidence": 3,
@@ -575,7 +627,7 @@ Enabling a skill does not grant new tool permissions. Worker requests still pass
 
 Returns the curated PoC/template registry. Templates describe vulnerability classes, required evidence, recommended high-level tools, Worker hints, safety notes, references, and tags.
 
-These templates are not a generic pentest knowledge base and they are not RAG. They are a bounded library of evidence requirements and safety constraints for specific checks such as role-diff IDOR review, OAST callback validation, security headers, cookie flags, SAST triage, and Android manifest review.
+These templates are not a generic pentest knowledge base and they are not RAG. They are a bounded library of evidence requirements and safety constraints for specific checks such as multi-tenant authorization bypass, GraphQL field authorization, OAuth/OIDC flow review, SSRF impact triage, RCE/deserialization triage, injection impact triage, file upload/path traversal, secrets exposure, cloud storage exposure, Kubernetes/container risk, SBOM vulnerable components, exposed services, AI prompt/tool injection, role-diff IDOR review, OAST callback validation, SAST triage, and Android manifest review.
 
 ```json
 [
@@ -1242,50 +1294,139 @@ The response is a read model only. It does not create findings, approve actions,
 
 `workerComparisons` are derived from worker trace spans, local cost ledger entries, graph facts, evidence links, and findings. They let the operator compare Agent Worker usefulness without reading raw prompts or letting workers self-report quality.
 
+## GET /runs/{id}/enterprise-scorer
+
+Returns a read-only fixed-scenario scorer for aggressive enterprise pentest readiness. It evaluates whether a run is prepared to identify high-risk vulnerabilities across scope safety, high-risk template bias, typed tool governance, browser/proxy runner readiness, evidence quality, authorization depth, OAST readiness, external scanner adapter governance, vulnerability lifecycle, AI-agent security, and stuck-loop supervision.
+
+The scorer does not invoke tools, dispatch Workers, approve actions, mutate run state, or read raw evidence blobs. Blocked raw-tool attempts are counted as governance evidence; confirmed high/critical findings still require useful-reviewed same-run evidence.
+
+```json
+{
+  "mode": "enterprise_pentest_scorer",
+  "posture": "usable",
+  "score": 72,
+  "summary": "6/11 enterprise pentest scenario(s) pass; 6 high-risk template(s), 8 high-risk recommendation(s), 1 confirmed high/critical finding(s).",
+  "counts": {
+    "enabledHighRiskTemplates": 6,
+    "highRiskRecommendations": 8,
+    "usefulEvidence": 4,
+    "confirmedHighOrCriticalFindings": 1,
+    "blockedUnsafeTools": 1
+  },
+  "scenarios": [
+    {
+      "id": "authz_depth",
+      "status": "pass",
+      "objective": "Verify enterprise-critical broken access control with at least two role contexts and comparable evidence.",
+      "gaps": []
+    }
+  ],
+  "audit": {
+    "readOnly": true,
+    "invokesTools": false,
+    "createsApprovals": false,
+    "mutatesRunState": false,
+    "readsRawEvidence": false
+  }
+}
+```
+
+## GET /runs/{id}/vulnerability-lifecycle
+
+Returns a read-only vulnerability lifecycle view for enterprise pentest delivery. It joins findings, evidence-quality gates, duplicate detection, report bundles, and run exports so operators can see whether high/critical issues have moved from candidate intake to validation, confirmed-only delivery, and retest readiness.
+
+The lifecycle view does not confirm findings, reject findings, read raw evidence blobs, invoke tools, generate reports, or generate exports. It only reports what the existing evidence, finding, report, and export records already prove.
+
+```json
+{
+  "mode": "vulnerability_lifecycle",
+  "posture": "triage",
+  "score": 72,
+  "summary": "1/2 high/critical finding(s) confirmed; 1 high/critical finding(s) delivery-ready; 1 report bundle(s), 0 export(s), 1 duplicate group(s).",
+  "counts": {
+    "findings": 3,
+    "candidate": 1,
+    "confirmed": 1,
+    "highOrCritical": 2,
+    "confirmedHighOrCritical": 1,
+    "confirmedHighOrCriticalDeliveryReady": 1,
+    "duplicateGroups": 1,
+    "reportBundles": 1,
+    "confirmedOnlyExports": 0
+  },
+  "lanes": [
+    {
+      "id": "delivery",
+      "title": "Report and export delivery",
+      "status": "warn",
+      "detail": "1/1 confirmed finding(s) delivery-ready; 1 report bundle(s), 0 confirmed-only export(s)."
+    }
+  ],
+  "findings": [
+    {
+      "findingId": "finding_x",
+      "severity": "critical",
+      "phase": "delivery",
+      "deliveryReady": true,
+      "usefulEvidence": 1,
+      "reproductionEvidence": 1
+    }
+  ],
+  "audit": {
+    "readOnly": true,
+    "mutatesFindings": false,
+    "validatesFindings": false,
+    "generatesReports": false,
+    "invokesTools": false,
+    "readsRawEvidence": false
+  }
+}
+```
+
 ## GET /runs/{id}/reference-benchmark
 
-Returns a read-only benchmark view that compares the current platform/run capability against the reference projects used for product direction: Cairn, HexStrike/AutoRedTeam, CAI/Apex, AIDA/CyberStrike/WonderSuite, DragonJAR Android Skill, pentest-agents, and rohitg00/ai-engineering-from-scratch.
+Returns a read-only benchmark view that compares the current platform/run capability against the reference projects used for product direction: Cairn, HexStrike/AutoRedTeam, ZAP/Burp/Playwright, Nuclei/Semgrep/Prowler/MobSF, CAI/Apex, LangGraph/OpenAI Agents SDK/PyRIT, AIDA/CyberStrike/WonderSuite, DefectDojo/Faraday/Dradis, DragonJAR Android Skill, pentest-agents, and rohitg00/ai-engineering-from-scratch.
 
 The response is a product roadmap gate, not an execution path. It shows copied principles, deliberately avoided patterns, remaining gaps, commercial blockers, and next build actions.
 
 ```json
 {
   "mode": "reference_project_benchmark",
-  "summary": "6/9 benchmark dimension(s) are commercially usable or better; 3 partial and 0 gap dimension(s) remain against the reference projects.",
+  "summary": "8/14 benchmark dimension(s) are commercially usable or better; 5 partial and 1 gap dimension(s) remain against the reference projects.",
   "counts": {
-    "referenceProjects": 6,
-    "dimensions": 9,
+    "referenceProjects": 11,
+    "dimensions": 14,
     "matched": 2,
-    "usable": 4,
-    "partial": 3,
-    "gaps": 0,
-    "commercialBlockers": 3
+    "usable": 6,
+    "partial": 5,
+    "gaps": 1,
+    "commercialBlockers": 6
   },
   "dimensions": [
     {
-      "id": "agent_worker_framework",
-      "title": "Agent Worker framework",
-      "status": "usable",
-      "score": 78,
-      "referenceProjects": ["Cairn", "claude-code-best/claude-code", "CAI", "Apex"],
-      "ours": "5 adapter type(s), 2 run Worker(s), 1 executed Worker task(s).",
-      "adopted": ["Agent Worker as minimum scheduling unit", "Generic CLI adapter contract", "No Worker-to-Worker protocol"],
-      "gaps": [],
-      "nextActions": ["Add more CLI runtimes through the same healthcheck, execute, timeout, and JSON-result contract."]
+      "id": "browser_proxy_dast",
+      "title": "Browser, proxy, and DAST workflow",
+      "status": "partial",
+      "score": 48,
+      "referenceProjects": ["OWASP ZAP", "Burp Suite", "Playwright"],
+      "ours": "1 browser session(s), 1 proxy session(s), 2 HTTP exchange evidence item(s), 1 browser snapshot(s).",
+      "adopted": ["Scope-gated HTTP capture", "HAR import boundary", "Proxy session records", "Browser snapshot evidence"],
+      "gaps": ["No true browser DOM/JavaScript automation, authenticated context manager, active spider, or TLS MITM local CA lifecycle yet."],
+      "nextActions": ["Promote browser/proxy capture into a Playwright-backed local runner with ZAP/Burp-style session and proxy controls."]
     }
   ],
   "projects": [
     {
-      "id": "hexstrike_autoredteam",
-      "name": "hexstrike-ai / AutoRedTeam-Orchestrator",
-      "referenceRole": "Broad tool ecosystem inspiration.",
-      "copiedPrinciples": ["Tool breadth as platform backlog", "External engines behind governed templates"],
-      "deliberatelyAvoided": ["Dumping 100+ raw tools into model context", "Letting Workers choose arbitrary commands"],
+      "id": "defectdojo_faraday_dradis",
+      "name": "OWASP DefectDojo / Faraday / Dradis",
+      "referenceRole": "Vulnerability management, collaboration, retest, and customer reporting lifecycle.",
+      "copiedPrinciples": ["Findings need evidence and validation state", "Reports are delivery artifacts, not raw logs"],
+      "deliberatelyAvoided": ["Treating every scanner observation as a customer-facing vulnerability"],
       "currentFit": "partial",
-      "remainingGap": "Integration items still need mapping, runtime, or design work."
+      "remainingGap": "No mature deduplication, retest workflow, SLA tracking, customer engagement model, or editable report template library yet."
     }
   ],
-  "nextActions": ["Convert the top Tool Integration Backlog item into a governed platform artifact before adding raw tools."]
+  "nextActions": ["Split the snapshot store into explicit relational tables and migrations before introducing multi-user collaboration or cloud sync."]
 }
 ```
 

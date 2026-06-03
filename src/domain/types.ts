@@ -34,9 +34,34 @@ export type Severity = 'critical' | 'high' | 'medium' | 'low' | 'info';
 export type Confidence = 'confirmed' | 'likely' | 'needs_dynamic_confirmation';
 export type ValidationState = 'candidate' | 'confirmed' | 'rejected';
 export type WorkerType = 'mock' | 'claude' | 'codex' | 'gemini' | 'kimi';
-export type DomainSkillCategory = 'web' | 'mobile' | 'cloud' | 'identity' | 'sast' | 'ctf' | 'reporting';
+export type DomainSkillCategory =
+  | 'web'
+  | 'api'
+  | 'mobile'
+  | 'cloud'
+  | 'container'
+  | 'identity'
+  | 'sast'
+  | 'supply_chain'
+  | 'network'
+  | 'ai_security'
+  | 'ctf'
+  | 'reporting';
 export type DomainSkillStatus = 'ready' | 'external_required' | 'planned';
-export type PocTemplateCategory = 'web' | 'auth' | 'oast' | 'mobile' | 'cloud' | 'sast';
+export type PocTemplateCategory =
+  | 'web'
+  | 'api'
+  | 'auth'
+  | 'oauth'
+  | 'oast'
+  | 'mobile'
+  | 'cloud'
+  | 'container'
+  | 'sast'
+  | 'supply_chain'
+  | 'secrets'
+  | 'network'
+  | 'ai_security';
 export type PocTemplateStatus = 'ready' | 'external_required' | 'planned';
 export type RegisteredToolboxBundleStatus = 'available' | 'partial' | 'planned' | 'unavailable';
 export type ConnectorKind = 'mcp' | 'cli' | 'http_api' | 'container';

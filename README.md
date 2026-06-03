@@ -217,7 +217,7 @@ bootstrap -> reason -> explore -> reason -> ... -> completed
 | Reporting | Evidence-backed findings, validation state, Markdown reports, run export bundles. |
 | Capture | HTTP exchange capture, HAR import, browser snapshots, browser sessions, explicit HTTP proxy capture. |
 | Domain imports | SARIF, Android Manifest, Cloud IAM policy, Identity Graph. |
-| Observability | Trace spans, cost ledger, evaluations, scorecards, capability radar, evidence quality, delivery readiness. |
+| Observability | Trace spans, cost ledger, evaluations, scorecards, capability radar, evidence quality, delivery readiness, enterprise pentest scorer, vulnerability lifecycle, run supervisor. |
 | Ecosystem | Tool Packs, Toolbox Profiles, Toolbox Bundles, Connector Registry, integration backlog. |
 | CI | GitHub Actions for install, typecheck, test, and build on Node 24. |
 
@@ -389,11 +389,16 @@ AgentRed is currently a platform kernel, not a finished hosted product. The foll
 - Cloud tenant, RBAC, SSO, billing, and redacted sync
 - Production-grade relational storage and migrations
 
+The maturity path is tracked in [Maturity Roadmap](docs/MATURITY_ROADMAP.md), with a deeper [AI Red Team Agent Reference Analysis](docs/AI_RED_TEAM_AGENT_REFERENCE_ANALYSIS.md) for high-star autonomous pentest agents, LLM red-team frameworks, MCP tool ecosystems, and mature AgentOps patterns. The enterprise high-risk workflow target is captured in [Enterprise Pentest Agent Workflows](docs/ENTERPRISE_PENTEST_AGENT_WORKFLOWS.md), including the Z3r0-inspired multi-agent workbench, real browser/proxy runner, typed scanner adapters, scorers, evidence center, and vulnerability lifecycle. These references are mapped into first-party AgentRed APIs, evidence contracts, parsers, and roadmap gates.
+
 ### Documentation
 
 - [Architecture](docs/ARCHITECTURE.md)
 - [API Reference](docs/API.md)
 - [Security Model](docs/SECURITY_MODEL.md)
+- [Maturity Roadmap](docs/MATURITY_ROADMAP.md)
+- [AI Red Team Agent Reference Analysis](docs/AI_RED_TEAM_AGENT_REFERENCE_ANALYSIS.md)
+- [Enterprise Pentest Agent Workflows](docs/ENTERPRISE_PENTEST_AGENT_WORKFLOWS.md)
 - [Publishing Checklist](docs/PUBLISHING.md)
 - [Contributing](CONTRIBUTING.md)
 - [Security Policy](SECURITY.md)
@@ -585,7 +590,7 @@ bootstrap -> reason -> explore -> reason -> ... -> completed
 | 报告 | 证据支撑的 Finding、验证状态、Markdown 报告、Run Export。 |
 | 采集 | HTTP exchange capture、HAR import、browser snapshot、browser session、显式 HTTP proxy capture。 |
 | 领域导入 | SARIF、Android Manifest、Cloud IAM policy、Identity Graph。 |
-| 可观测性 | Trace span、成本账本、评估、scorecard、capability radar、evidence quality、delivery readiness。 |
+| 可观测性 | Trace span、成本账本、评估、scorecard、capability radar、evidence quality、delivery readiness、enterprise pentest scorer、vulnerability lifecycle、run supervisor。 |
 | 生态 | Tool Packs、Toolbox Profiles、Toolbox Bundles、Connector Registry、integration backlog。 |
 | CI | GitHub Actions 覆盖 install、typecheck、test 和 build。 |
 
@@ -757,11 +762,16 @@ AgentRed 目前是平台内核，不是完整托管产品。以下仍在路线�
 - Cloud tenant、RBAC、SSO、billing 和 redacted sync
 - 生产级关系型存储和迁移
 
+成熟化路径记录在 [Maturity Roadmap](docs/MATURITY_ROADMAP.md)，更深入的高星 AI 红队智能体、LLM 红队框架、MCP 工具体系和成熟 AgentOps 对标见 [AI Red Team Agent Reference Analysis](docs/AI_RED_TEAM_AGENT_REFERENCE_ANALYSIS.md)。企业级高危漏洞识别和渗透测试工作流见 [Enterprise Pentest Agent Workflows](docs/ENTERPRISE_PENTEST_AGENT_WORKFLOWS.md)，其中纳入了 Z3r0 式多角色工作台、真实浏览器/代理 Runner、typed scanner adapter、scorer、证据中心和漏洞生命周期。这些参考会被映射成 AgentRed 自己的 API、证据契约、解析器和路线图门禁。
+
 ### 文档
 
 - [Architecture](docs/ARCHITECTURE.md)
 - [API Reference](docs/API.md)
 - [Security Model](docs/SECURITY_MODEL.md)
+- [Maturity Roadmap](docs/MATURITY_ROADMAP.md)
+- [AI Red Team Agent Reference Analysis](docs/AI_RED_TEAM_AGENT_REFERENCE_ANALYSIS.md)
+- [Enterprise Pentest Agent Workflows](docs/ENTERPRISE_PENTEST_AGENT_WORKFLOWS.md)
 - [Publishing Checklist](docs/PUBLISHING.md)
 - [Contributing](CONTRIBUTING.md)
 - [Security Policy](SECURITY.md)

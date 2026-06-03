@@ -198,10 +198,17 @@ function collectSignals(store: PlatformStore, run: Run): DomainSignals {
 
 function domainCard(skill: RunDomainSkillView, signals: DomainSignals): DomainSkillReadinessCard {
   if (skill.id === 'web.bounty-workspace') return webBountyCard(skill, signals);
+  if (skill.id === 'web.high-risk-triage') return highRiskWebCard(skill, signals);
+  if (skill.id === 'web.browser-proxy-runner') return browserProxyRunnerCard(skill, signals);
+  if (skill.id === 'api.authz-workflow' || skill.id === 'api.graphql-oauth-review') return apiHighRiskCard(skill, signals);
   if (skill.id === 'mobile.android-apk') return androidCard(skill, signals);
   if (skill.id === 'sast.semgrep-baseline') return sastCard(skill, signals);
   if (skill.id === 'cloud.iam-audit') return cloudIamCard(skill, signals);
+  if (skill.id === 'cloud.k8s-container-posture') return cloudNativeCard(skill, signals);
   if (skill.id === 'identity.ad-paths') return identityCard(skill, signals);
+  if (skill.id === 'supply-chain.sca-secrets') return supplyChainCard(skill, signals);
+  if (skill.id === 'network.external-surface-baseline') return externalSurfaceCard(skill, signals);
+  if (skill.id === 'ai.agent-infra-security') return aiAgentSecurityCard(skill, signals);
   if (skill.id === 'reporting.commercial-handoff') return reportingCard(skill, signals);
   if (skill.id === 'ctf.flag-submit') return ctfCard(skill, signals);
   return genericCard(skill, signals);
@@ -234,6 +241,88 @@ function webBountyCard(skill: RunDomainSkillView, signals: DomainSignals): Domai
       ...(signals.credentialReferences === 0 ? ['Add placeholder credential references before authenticated role-difference testing.'] : []),
     ],
     referenceAlignment: ['WonderSuite browser/proxy workflow', 'AIDA/CyberStrike evidence cards', 'pentest-agents scope/report gate'],
+  });
+}
+
+function highRiskWebCard(skill: RunDomainSkillView, signals: DomainSignals): DomainSkillReadinessCard {
+  const httpEvidence = signals.evidence.filter((item) => item.kind === 'http_exchange');
+  const commandEvidence = signals.evidence.filter((item) => item.kind === 'command_output');
+  const useful = signals.evidence.filter((item) => signals.usefulEvidenceIds.has(item.id));
+  const inputs = [
+    input('web_high.http', 'HTTP/browser/proxy evidence', httpEvidence.length, 'Baseline and focused endpoint evidence for high-impact web hypotheses.', true, httpEvidence.map((item) => item.id)),
+    input('web_high.scanner', 'Scanner or adapter evidence', commandEvidence.length, 'Template, scanner, source, or advisory evidence for SSRF/RCE/injection/upload/path traversal triage.', false, commandEvidence.map((item) => item.id)),
+    input('web_high.oast', 'OAST callback evidence', signals.evidence.filter((item) => item.kind === 'oast_callback').length, 'Callback proof for blind SSRF/webhook cases; impact still needs review.', false),
+    input('web_high.review', 'Useful evidence review', useful.length, 'Human-reviewed evidence before critical/high confidence.', true, useful.map((item) => item.id)),
+  ];
+  return card({
+    skill,
+    signals,
+    posture: readiness(skill, inputs),
+    summary: `${httpEvidence.length} HTTP evidence item(s), ${commandEvidence.length} scanner/source evidence item(s), ${useful.length} useful review(s).`,
+    inputs,
+    evidenceRequirements: ['In-scope HTTP/browser/proxy evidence.', 'Scanner/source/advisory evidence for high-risk hypothesis.', 'Human useful review before confirmed critical/high findings.'],
+    allowedArtifacts: ['HTTP exchange', 'browser snapshot', 'OAST callback', 'scanner output', 'SARIF evidence', 'access-review diff'],
+    safetyGates: ['R3 approval for state-changing, OAST, or exploit validation', 'No data exfiltration', 'No destructive commands', 'R4 remains blocked'],
+    nextActions: [
+      ...(!skill.enabled ? [`Enable ${skill.name} for enterprise web runs that must prioritize high-impact classes.`] : []),
+      ...(httpEvidence.length === 0 ? ['Capture focused HTTP/browser evidence before proposing high-impact web findings.'] : []),
+      ...(useful.length === 0 && signals.evidence.length > 0 ? ['Review the strongest evidence item and mark useful before confirmation.'] : []),
+    ],
+    referenceAlignment: ['Z3r0 penetration engineer lane', 'PentestGPT high-impact benchmark discipline', 'Burp/ZAP evidence-first workflow'],
+  });
+}
+
+function browserProxyRunnerCard(skill: RunDomainSkillView, signals: DomainSignals): DomainSkillReadinessCard {
+  const screenshotEvidence = signals.evidence.filter((item) => item.kind === 'screenshot');
+  const httpEvidence = signals.evidence.filter((item) => item.kind === 'http_exchange');
+  const inputs = [
+    input('runner.browser_snapshot', 'Browser snapshots', signals.browserSnapshots.length + screenshotEvidence.length, 'Rendered proof for JavaScript/session-heavy workflows.', true, screenshotEvidence.map((item) => item.id)),
+    input('runner.proxy_or_har', 'Proxy or HAR captures', signals.captureImports.length + httpEvidence.length, 'Real traffic evidence for replay and access review.', true, flatten(signals.captureImports.map((item) => item.evidenceIds)).concat(httpEvidence.map((item) => item.id))),
+    input('runner.access_review', 'Access review diffs', signals.accessReviews.length, 'Role or tenant comparison evidence generated from captured traffic.', false, accessReviewEvidence(signals.accessReviews)),
+  ];
+  return card({
+    skill,
+    signals,
+    posture: readiness(skill, inputs),
+    summary: `${signals.browserSnapshots.length} browser snapshot(s), ${signals.captureImports.length} HAR import(s), ${httpEvidence.length} HTTP evidence item(s).`,
+    inputs,
+    evidenceRequirements: ['Rendered browser snapshot or screenshot.', 'Proxy/HAR/HTTP exchange evidence.', 'Cookies and tokens must stay out of Worker context.'],
+    allowedArtifacts: ['browser snapshot', 'screenshot evidence', 'HTTP exchange', 'HAR import', 'access-review diff'],
+    safetyGates: ['Out-of-scope navigation blocked', 'raw cookies/tokens redacted', 'TLS MITM requires future local CA lifecycle approval'],
+    nextActions: [
+      ...(!skill.enabled ? ['Enable Browser Proxy Runner Workflow when JS/session evidence matters.'] : []),
+      ...(signals.browserSnapshots.length === 0 ? ['Capture a browser snapshot or screenshot for rendered proof.'] : []),
+      ...(signals.captureImports.length === 0 && httpEvidence.length === 0 ? ['Capture traffic through proxy, HAR import, browser.navigate, or http.request.'] : []),
+    ],
+    referenceAlignment: ['Z3r0 Docker sandbox execution surface', 'Playwright trace workflow', 'Burp/ZAP proxy model'],
+  });
+}
+
+function apiHighRiskCard(skill: RunDomainSkillView, signals: DomainSignals): DomainSkillReadinessCard {
+  const httpEvidence = signals.evidence.filter((item) => item.kind === 'http_exchange');
+  const differentialReviews = signals.accessReviews.filter((item) => item.status === 'differential_observed');
+  const inputs = [
+    input('api.http', 'API HTTP evidence', httpEvidence.length, 'API/OpenAPI/GraphQL/OAuth evidence from in-scope endpoints.', true, httpEvidence.map((item) => item.id)),
+    input('api.credentials', 'Credential placeholders', signals.credentialReferences, 'Role or tenant placeholders for authz comparison.', true),
+    input('api.access_review', 'Access review diffs', signals.accessReviews.length, 'Baseline/comparison evidence for BOLA, BFLA, resolver authz, or tenant isolation.', false, accessReviewEvidence(signals.accessReviews)),
+    input('api.differential', 'Differential observed', differentialReviews.length, 'Observed response differences that still need human impact review.', false, accessReviewEvidence(differentialReviews)),
+  ];
+  return card({
+    skill,
+    signals,
+    posture: readiness(skill, inputs),
+    summary: `${httpEvidence.length} API evidence item(s), ${signals.credentialReferences} credential placeholder(s), ${signals.accessReviews.length} access review(s).`,
+    inputs,
+    evidenceRequirements: ['API HTTP evidence.', 'At least two placeholder credentials for role/tenant comparison.', 'Access-review diff before high-severity authz claims.'],
+    allowedArtifacts: ['HTTP exchange', 'OpenAPI metadata', 'GraphQL plan output', 'OAuth/OIDC metadata', 'access-review diff'],
+    safetyGates: ['No raw tokens', 'no credential replay', 'mutating checks are R3', 'introspection/authenticated validation remains approval-gated'],
+    nextActions: [
+      ...(!skill.enabled ? [`Enable ${skill.name} for API/identity-backed targets.`] : []),
+      ...(signals.credentialReferences < 2 ? ['Create two role or tenant credential placeholders before authz comparison.'] : []),
+      ...(httpEvidence.length === 0 ? ['Capture OpenAPI, GraphQL, OAuth/OIDC, or endpoint HTTP evidence.'] : []),
+      ...(signals.accessReviews.length === 0 && signals.credentialReferences >= 2 && httpEvidence.length >= 2 ? ['Run access.compare_evidence across role-specific evidence.'] : []),
+    ],
+    referenceAlignment: ['OWASP API Top 10 evidence discipline', 'Z3r0 manual review records', 'PentestAgent black-box workflow'],
   });
 }
 
@@ -339,6 +428,106 @@ function identityCard(skill: RunDomainSkillView, signals: DomainSignals): Domain
       ...(signals.accessReviews.length === 0 ? ['Use access reviews for role-difference proof when web or identity evidence exists.'] : []),
     ],
     referenceAlignment: ['Enterprise identity module', 'AIDA evidence review loop'],
+  });
+}
+
+function cloudNativeCard(skill: RunDomainSkillView, signals: DomainSignals): DomainSkillReadinessCard {
+  const commandEvidence = signals.evidence.filter((item) => item.kind === 'command_output');
+  const inputs = [
+    input('cloud_native.iam', 'Cloud IAM imports', signals.cloudIamImports.length, 'Read-only IAM policy evidence for cloud-native privilege context.', false, signals.cloudIamImports.map((item) => item.evidenceId)),
+    input('cloud_native.posture', 'K8s/container posture evidence', commandEvidence.length, 'Read-only manifests, RBAC, workload, image, or scanner output evidence.', true, commandEvidence.map((item) => item.id)),
+    input('cloud_native.findings', 'Candidate findings', signals.findings.length, 'Evidence-backed cloud-native findings in review.', false, flatten(signals.findings.map((item) => item.evidenceIds))),
+  ];
+  return card({
+    skill,
+    signals,
+    posture: readiness(skill, inputs),
+    summary: `${signals.cloudIamImports.length} IAM import(s), ${commandEvidence.length} command/scanner evidence item(s).`,
+    inputs,
+    evidenceRequirements: ['Read-only posture evidence for RBAC/workload/container risk.', 'Affected namespace, service account, workload, or principal context.', 'No secret extraction.'],
+    allowedArtifacts: ['IAM policy JSON', 'K8s manifest', 'RBAC scanner output', 'container posture output', 'file hash'],
+    safetyGates: ['No kubectl apply/delete/exec', 'no pod escape execution', 'no secret reads', 'cluster actions require explicit ROE'],
+    nextActions: [
+      ...(!skill.enabled ? ['Enable Kubernetes And Container Posture for approved cloud-native assessments.'] : []),
+      ...(commandEvidence.length === 0 ? ['Import or capture read-only K8s/container posture evidence.'] : []),
+    ],
+    referenceAlignment: ['CIS Kubernetes Benchmark', 'Prowler posture workflow', 'Z3r0 sandbox binding model'],
+  });
+}
+
+function supplyChainCard(skill: RunDomainSkillView, signals: DomainSignals): DomainSkillReadinessCard {
+  const sarifEvidence = signals.sarifImports.map((item) => item.evidenceId);
+  const commandEvidence = signals.evidence.filter((item) => item.kind === 'command_output' || item.kind === 'file_hash');
+  const inputs = [
+    input('supply.sarif', 'SARIF/SCA imports', signals.sarifImports.length, 'Static, dependency, or secret-scanning evidence.', false, sarifEvidence),
+    input('supply.command', 'Scanner/file-hash evidence', commandEvidence.length, 'SBOM, SCA, CI/CD, or secret exposure output.', true, commandEvidence.map((item) => item.id)),
+    input('supply.reviewed', 'Useful reviewed evidence', signals.usefulEvidenceIds.size, 'Human review before lifecycle or customer-facing reporting.', true, [...signals.usefulEvidenceIds]),
+  ];
+  return card({
+    skill,
+    signals,
+    posture: readiness(skill, inputs),
+    summary: `${signals.sarifImports.length} SARIF import(s), ${commandEvidence.length} scanner/file evidence item(s), ${signals.usefulEvidenceIds.size} useful review(s).`,
+    inputs,
+    evidenceRequirements: ['SBOM/SCA/SARIF/secret-scan evidence.', 'Reachability and deployment context before high severity.', 'Secret values must never be reproduced.'],
+    allowedArtifacts: ['SARIF', 'SBOM output', 'secret scan output with values redacted', 'file hash', 'CI/CD config evidence'],
+    safetyGates: ['No secret replay', 'no raw secret values', 'no pipeline dispatch', 'owner review before disclosure'],
+    nextActions: [
+      ...(!skill.enabled ? ['Enable Supply Chain And Secrets Exposure for source, CI/CD, SBOM, or dependency runs.'] : []),
+      ...(commandEvidence.length === 0 && signals.sarifImports.length === 0 ? ['Import SARIF/SBOM/SCA or secret-scanning evidence.'] : []),
+    ],
+    referenceAlignment: ['Dependency-Track component risk model', 'Semgrep/SARIF workflow', 'DefectDojo lifecycle'],
+  });
+}
+
+function externalSurfaceCard(skill: RunDomainSkillView, signals: DomainSignals): DomainSkillReadinessCard {
+  const commandEvidence = signals.evidence.filter((item) => item.kind === 'command_output');
+  const httpEvidence = signals.evidence.filter((item) => item.kind === 'http_exchange');
+  const inputs = [
+    input('surface.scope', 'Allowed asset scope', signals.run.scopePolicy.allowedAssets.length, 'Explicit approved asset set for external surface mapping.', true),
+    input('surface.metadata', 'DNS/TLS/service evidence', commandEvidence.length + httpEvidence.length, 'Scoped DNS, TLS, HTTP, or service inventory evidence.', true, commandEvidence.concat(httpEvidence).map((item) => item.id)),
+    input('surface.blockers', 'Denied assets configured', signals.run.scopePolicy.deniedAssets.length, 'Deny rules reduce accidental out-of-scope exploration.', false),
+  ];
+  return card({
+    skill,
+    signals,
+    posture: readiness(skill, inputs),
+    summary: `${signals.run.scopePolicy.allowedAssets.length} allowed asset rule(s), ${commandEvidence.length + httpEvidence.length} surface evidence item(s).`,
+    inputs,
+    evidenceRequirements: ['Explicit allowlist scope.', 'DNS/TLS/HTTP/service metadata evidence.', 'Prioritize exposed admin, identity, cloud, and database surfaces.'],
+    allowedArtifacts: ['DNS records', 'TLS certificate metadata', 'HTTP fingerprint evidence', 'bounded scanner output'],
+    safetyGates: ['No internet-wide scanning', 'no brute force', 'no exploit spraying', 'rate limits enforced'],
+    nextActions: [
+      ...(!skill.enabled ? ['Enable External Surface Baseline for internet-facing enterprise assessments.'] : []),
+      ...(commandEvidence.length + httpEvidence.length === 0 ? ['Capture DNS/TLS/HTTP or governed inventory evidence.'] : []),
+    ],
+    referenceAlignment: ['ProjectDiscovery inventory workflow', 'Faraday asset model', 'Z3r0 controlled sandbox execution'],
+  });
+}
+
+function aiAgentSecurityCard(skill: RunDomainSkillView, signals: DomainSignals): DomainSkillReadinessCard {
+  const commandEvidence = signals.evidence.filter((item) => item.kind === 'command_output');
+  const httpEvidence = signals.evidence.filter((item) => item.kind === 'http_exchange');
+  const screenshotEvidence = signals.evidence.filter((item) => item.kind === 'screenshot');
+  const inputs = [
+    input('ai.eval', 'AI eval or scanner evidence', commandEvidence.length, 'promptfoo, PyRIT, AI-Infra-Guard, MCP/skill scan, or tool trace evidence.', true, commandEvidence.map((item) => item.id)),
+    input('ai.http', 'AI app HTTP/browser evidence', httpEvidence.length + screenshotEvidence.length, 'Application, agent, or tool-call boundary evidence.', false, httpEvidence.concat(screenshotEvidence).map((item) => item.id)),
+    input('ai.reviewed', 'Useful reviewed evidence', signals.usefulEvidenceIds.size, 'Operator-reviewed impact outside the model under test.', true, [...signals.usefulEvidenceIds]),
+  ];
+  return card({
+    skill,
+    signals,
+    posture: readiness(skill, inputs),
+    summary: `${commandEvidence.length} eval/scanner evidence item(s), ${httpEvidence.length + screenshotEvidence.length} app evidence item(s).`,
+    inputs,
+    evidenceRequirements: ['External eval/scanner or tool trace evidence.', 'Impact tied to unauthorized tool use, data exposure, or policy bypass.', 'Scoring outside the model under test.'],
+    allowedArtifacts: ['promptfoo/PyRIT result', 'AI-Infra-Guard scan output', 'MCP/skill manifest scan', 'redacted tool trace', 'HTTP/browser evidence'],
+    safetyGates: ['No prompt theft', 'no unsafe tool execution', 'no unredacted transcript export', 'model cannot self-score'],
+    nextActions: [
+      ...(!skill.enabled ? ['Enable AI Agent Infrastructure Security for AI app, MCP, skill, or tool-calling systems.'] : []),
+      ...(commandEvidence.length === 0 ? ['Import AI-agent security eval or MCP/skill scan evidence.'] : []),
+    ],
+    referenceAlignment: ['Tencent AI-Infra-Guard', 'promptfoo red-team eval', 'PyRIT scorer/orchestrator pattern'],
   });
 }
 

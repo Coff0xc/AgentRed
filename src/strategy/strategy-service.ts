@@ -155,7 +155,7 @@ export class StrategyService {
       runId,
       mode: 'dispatcher_controlled_agent_worker',
       summary: `${activeEvidence.length} evidence item(s), ${activeFindings.length} active finding(s), ${pendingApprovals.length} pending approval(s), ${blockedCount} blocked tool call(s).`,
-      recommendations: finalRecommendations.slice(0, 10),
+      recommendations: finalRecommendations.slice(0, 16),
       workerHints: [
         'Prefer low-risk evidence capture before proposing findings.',
         'Use toolRequests; never execute tools directly from the Worker.',
@@ -248,25 +248,101 @@ function pocTemplateRecommendations(input: {
 }): StrategyRecommendation[] {
   const recommendations: StrategyRecommendation[] = [];
   for (const template of input.templates) {
-    if (template.id === 'auth.role-diff.idor') {
+    if (template.id === 'auth.role-diff.idor' || template.id === 'auth.multi-tenant-bypass') {
       recommendations.push(...roleDiffRecommendations(input.target, template, input.activeEvidence, input.activeCredentials));
     }
-    if (template.id === 'oast.ssrffallback' && !input.hasActiveOastSession) {
-      recommendations.push({
-        id: `poc.${template.id}.oast.start_session`,
-        title: `${template.name}: start local OAST inbox`,
-        rationale:
-          'The enabled PoC template requires callback evidence. Start a local inbox first; live payload placement remains approval-gated validation work.',
-        riskLevel: 'R0',
-        toolRequest: {
-          tool: 'oast.start_session',
-          target: input.target,
-          method: 'POST',
-          riskLevel: 'R0',
-          args: {},
-          purpose: 'Create a local OAST callback inbox for evidence capture.',
-        },
-      });
+    if (template.id === 'api.graphql-field-authz') {
+      recommendations.push(scannerRecommendationForTemplate(input.target, template, 'web.graphql_introspection_plan'));
+      recommendations.push(...roleDiffRecommendations(input.target, template, input.activeEvidence, input.activeCredentials));
+    }
+    if (template.id === 'oauth.oidc-flow-review') {
+      recommendations.push(scannerRecommendationForTemplate(input.target, template, 'web.oauth_oidc_metadata'));
+      recommendations.push(browserRecommendationForTemplate(input.target, template, 'Capture redacted browser-flow evidence for OAuth/OIDC review.'));
+    }
+    if ((template.id === 'oast.ssrffallback' || template.id === 'web.ssrf-impact-triage') && !input.hasActiveOastSession) {
+      recommendations.push(oastInboxRecommendation(input.target, template));
+    }
+    if (template.id === 'web.rce-deserialization-triage') {
+      recommendations.push(scannerRecommendationForTemplate(input.target, template, 'web.nuclei.safe_templates'));
+      recommendations.push(
+        operatorRecommendation(
+          template,
+          'Map RCE/deserialization sink evidence',
+          'Link route, version/advisory, source/SAST signal, stack trace, or bounded safe-marker evidence before proposing critical impact.',
+          'R1',
+        ),
+      );
+    }
+    if (template.id === 'web.injection-impact-triage') {
+      recommendations.push(scannerRecommendationForTemplate(input.target, template, 'web.sqlmap.verify'));
+      recommendations.push(
+        operatorRecommendation(
+          template,
+          'Separate injection signal from impact',
+          'Collect non-destructive error, timing, source, or scanner evidence before requesting approval-gated validation.',
+          'R1',
+        ),
+      );
+    }
+    if (template.id === 'web.file-upload-path-traversal') {
+      recommendations.push(scannerRecommendationForTemplate(input.target, template, 'web.link_form_map'));
+      recommendations.push(browserRecommendationForTemplate(input.target, template, 'Capture rendered upload/download surfaces before any state-changing validation.'));
+    }
+    if (template.id === 'secrets.exposure-review') {
+      recommendations.push(
+        operatorRecommendation(
+          template,
+          'Import secret-scanning evidence',
+          'Attach SARIF, command_output, or file-hash evidence that reports secret type and location without copying raw secret values.',
+          'R0',
+        ),
+      );
+    }
+    if (template.id === 'cloud.storage-public-exposure') {
+      recommendations.push(scannerRecommendationForTemplate(input.target, template, 'web.nuclei.safe_templates'));
+      recommendations.push(
+        operatorRecommendation(
+          template,
+          'Attach cloud storage policy evidence',
+          'Import read-only storage policy, IAM policy, or redacted HTTP listing evidence before proposing data exposure impact.',
+          'R0',
+        ),
+      );
+    }
+    if (template.id === 'container.k8s-rbac-risk') {
+      recommendations.push(
+        operatorRecommendation(
+          template,
+          'Import Kubernetes posture evidence',
+          'Attach read-only manifest, RBAC, workload, or scanner output evidence; do not request cluster mutation or secret reads.',
+          'R0',
+        ),
+      );
+    }
+    if (template.id === 'supply-chain.sbom-vulnerable-component') {
+      recommendations.push(
+        operatorRecommendation(
+          template,
+          'Import SBOM or SCA evidence',
+          'Attach SBOM/SCA evidence and rank by KEV/EPSS, reachability, exposure, and mitigation status before creating lifecycle work.',
+          'R0',
+        ),
+      );
+    }
+    if (template.id === 'network.exposed-service-risk') {
+      recommendations.push(scannerRecommendationForTemplate(input.target, template, 'network.dns_records'));
+      recommendations.push(scannerRecommendationForTemplate(input.target, template, 'network.tls_certificate'));
+      recommendations.push(scannerRecommendationForTemplate(input.target, template, 'network.nmap.safe_top_ports'));
+    }
+    if (template.id === 'ai.prompt-tool-injection') {
+      recommendations.push(
+        operatorRecommendation(
+          template,
+          'Import AI-agent security eval evidence',
+          'Attach promptfoo, PyRIT, AI-Infra-Guard, MCP/skill scan, or tool-call trace evidence and score impact outside the model under test.',
+          'R0',
+        ),
+      );
     }
     for (const tool of template.recommendedTools) {
       const scannerPrefix = 'scanner.run_template:';
@@ -294,6 +370,84 @@ function pocTemplateRecommendations(input: {
     }
   }
   return recommendations;
+}
+
+function scannerRecommendationForTemplate(
+  target: string,
+  template: WorkerPocTemplateContext,
+  scannerTemplateId: string,
+): StrategyRecommendation {
+  const scanner = listScannerTemplates().find((item) => item.id === scannerTemplateId);
+  const riskLevel = scanner?.defaultRiskLevel ?? 'R2';
+  return {
+    id: `poc.${template.id}.scanner.${scannerTemplateId}`,
+    title: `${template.name}: ${scanner?.name ?? scannerTemplateId}`,
+    rationale:
+      `The enabled high-risk template expects ${template.requiredEvidence.join(', ')} evidence. ` +
+      'Request this governed scanner template through the Tool Gateway; profile readiness, scope, rate, and approval gates still apply.',
+    riskLevel,
+    toolRequest: {
+      tool: 'scanner.run_template',
+      target,
+      method: 'GET',
+      riskLevel,
+      args: { template: scannerTemplateId, timeoutMs: 10_000 },
+      purpose: scanner?.description ?? `Collect evidence for ${template.name}.`,
+    },
+  };
+}
+
+function browserRecommendationForTemplate(
+  target: string,
+  template: WorkerPocTemplateContext,
+  purpose: string,
+): StrategyRecommendation {
+  return {
+    id: `poc.${template.id}.browser.navigate`,
+    title: `${template.name}: capture browser evidence`,
+    rationale: 'Rendered browser evidence helps validate user-visible impact while keeping cookies and tokens outside Worker context.',
+    riskLevel: 'R1',
+    toolRequest: {
+      tool: 'browser.navigate',
+      target,
+      method: 'GET',
+      riskLevel: 'R1',
+      args: { timeoutMs: 10_000 },
+      purpose,
+    },
+  };
+}
+
+function oastInboxRecommendation(target: string, template: WorkerPocTemplateContext): StrategyRecommendation {
+  return {
+    id: `poc.${template.id}.oast.start_session`,
+    title: `${template.name}: start local OAST inbox`,
+    rationale:
+      'The enabled template requires callback evidence. Start a local inbox first; live payload placement remains approval-gated validation work.',
+    riskLevel: 'R0',
+    toolRequest: {
+      tool: 'oast.start_session',
+      target,
+      method: 'POST',
+      riskLevel: 'R0',
+      args: {},
+      purpose: 'Create a local OAST callback inbox for evidence capture.',
+    },
+  };
+}
+
+function operatorRecommendation(
+  template: WorkerPocTemplateContext,
+  title: string,
+  rationale: string,
+  riskLevel: RiskLevel,
+): StrategyRecommendation {
+  return {
+    id: `poc.${template.id}.operator.${slugify(title)}`,
+    title: `${template.name}: ${title}`,
+    rationale,
+    riskLevel,
+  };
 }
 
 function roleDiffRecommendations(
@@ -376,4 +530,12 @@ function isDuplicateRecommendation(left: StrategyRecommendation, right: Strategy
     return Boolean(leftTemplate && rightTemplate && leftTemplate === rightTemplate);
   }
   return left.toolRequest?.tool === right.toolRequest?.tool && left.toolRequest?.tool === 'oast.start_session';
+}
+
+function slugify(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 80);
 }

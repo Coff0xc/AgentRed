@@ -112,6 +112,8 @@ async function route(
         'GET /runs/{id}/events',
         'GET /runs/{id}/progress',
         'GET /runs/{id}/mission-control',
+        'GET /runs/{id}/supervisor',
+        'POST /runs/{id}/supervisor/tick',
         'GET /runs/{id}/runtime-operations-workbench',
         'GET /runs/{id}/workbench',
         'GET /runs/{id}/flow',
@@ -148,6 +150,8 @@ async function route(
         'GET /runs/{id}/scorecard',
         'GET /runs/{id}/evidence-quality',
         'GET /runs/{id}/delivery-readiness',
+        'GET /runs/{id}/enterprise-scorer',
+        'GET /runs/{id}/vulnerability-lifecycle',
         'GET /runs/{id}/reference-benchmark',
         'GET /runs/{id}/replay-plans',
         'GET /runs/{id}/exports',
@@ -292,6 +296,18 @@ async function route(
   if (method === 'GET' && pathParts[0] === 'runs' && pathParts[2] === 'mission-control') {
     assertRunExists(platform, pathParts[1]);
     sendJson(response, 200, await platform.missionControl.get(pathParts[1], requestBaseUrl(request)));
+    return;
+  }
+
+  if (method === 'GET' && pathParts[0] === 'runs' && pathParts[2] === 'supervisor') {
+    assertRunExists(platform, pathParts[1]);
+    sendJson(response, 200, platform.supervisor.get(pathParts[1]));
+    return;
+  }
+
+  if (method === 'POST' && pathParts[0] === 'runs' && pathParts[2] === 'supervisor' && pathParts[3] === 'tick') {
+    assertRunExists(platform, pathParts[1]);
+    sendJson(response, 200, platform.supervisor.tick(pathParts[1]));
     return;
   }
 
@@ -805,6 +821,18 @@ async function route(
   if (method === 'GET' && pathParts[0] === 'runs' && pathParts[2] === 'delivery-readiness') {
     assertRunExists(platform, pathParts[1]);
     sendJson(response, 200, platform.deliveryReadiness.get(pathParts[1]));
+    return;
+  }
+
+  if (method === 'GET' && pathParts[0] === 'runs' && pathParts[2] === 'enterprise-scorer') {
+    assertRunExists(platform, pathParts[1]);
+    sendJson(response, 200, platform.enterprisePentestScorer.get(pathParts[1]));
+    return;
+  }
+
+  if (method === 'GET' && pathParts[0] === 'runs' && pathParts[2] === 'vulnerability-lifecycle') {
+    assertRunExists(platform, pathParts[1]);
+    sendJson(response, 200, platform.vulnerabilityLifecycle.get(pathParts[1]));
     return;
   }
 

@@ -78,6 +78,11 @@ export class ReferenceBenchmarkService {
       workerFrameworkDimension(framework.counts.workerAdapters, run.workerPool.length, runSignals.workerTasks),
       governedToolingDimension(framework.counts.highLevelTools, framework.counts.scannerTemplates, executionNode.counts.runnableScannerTemplates),
       ecosystemBreadthDimension(ecosystem.counts.connectorTools, ecosystem.counts.mappedConnectorTools, backlog.counts.items),
+      browserProxyDastDimension(runSignals, executionNode.counts.activeBrowserSessions, executionNode.counts.activeProxySessions),
+      scannerEcosystemDimension(framework.counts.scannerTemplates, framework.counts.readyToolboxAdapters, executionNode.counts.runnableScannerTemplates, runSignals.domainImports),
+      vulnerabilityLifecycleDimension(runSignals, delivery.status),
+      agentRuntimeEvalDimension(run.workerPool.length, runSignals.workerTasks, runSignals.traceSpans, runSignals.evaluations),
+      productionDataModelDimension(runSignals),
       localDesktopDimension(executionNode.status, executionNode.counts.activeBrowserSessions, executionNode.counts.activeProxySessions, executionNode.counts.activeOastSessions),
       evidenceDeliveryDimension(runSignals, delivery.status),
       domainSkillDimension(framework.counts.domainSkills, framework.counts.pocTemplates, runSignals.domainImports),
@@ -180,6 +185,116 @@ function ecosystemBreadthDimension(connectorTools: number, mappedTools: number, 
       ...(connectorTools === 0 ? ['No external ecosystem connector enabled for this run.'] : []),
     ],
     nextActions: ['Prioritize backlog items that become governed scanner templates, Tool Packs, or rigid Domain Skills.'],
+  });
+}
+
+function browserProxyDastDimension(signals: RunSignals, browserSessions: number, proxySessions: number): ReferenceBenchmarkDimension {
+  const score = clamp(
+    20 +
+      Math.min(browserSessions, 1) * 15 +
+      Math.min(proxySessions, 1) * 15 +
+      Math.min(signals.httpExchangeEvidence, 4) * 8 +
+      Math.min(signals.browserSnapshots, 2) * 8 +
+      Math.min(signals.captureImports, 2) * 6,
+  );
+  return dimension({
+    id: 'browser_proxy_dast',
+    title: 'Browser, proxy, and DAST workflow',
+    score,
+    referenceProjects: ['OWASP ZAP', 'Burp Suite', 'Playwright'],
+    ours:
+      `${browserSessions} browser session(s), ${proxySessions} proxy session(s), ` +
+      `${signals.httpExchangeEvidence} HTTP exchange evidence item(s), ${signals.browserSnapshots} browser snapshot(s).`,
+    adopted: ['Scope-gated HTTP capture', 'HAR import boundary', 'Proxy session records', 'Browser snapshot evidence'],
+    gaps: [
+      ...(browserSessions === 0 ? ['No active browser session in this run.'] : []),
+      ...(proxySessions === 0 ? ['No active proxy capture session in this run.'] : []),
+      'No true browser DOM/JavaScript automation, authenticated context manager, active spider, or TLS MITM local CA lifecycle yet.',
+    ],
+    nextActions: ['Promote browser/proxy capture into a Playwright-backed local runner with ZAP/Burp-style session and proxy controls.'],
+  });
+}
+
+function scannerEcosystemDimension(
+  scannerTemplates: number,
+  readyAdapters: number,
+  runnableTemplates: number,
+  domainImports: number,
+): ReferenceBenchmarkDimension {
+  const score = clamp(25 + Math.min(scannerTemplates, 20) * 2 + Math.min(readyAdapters, 6) * 6 + Math.min(runnableTemplates, 8) * 5 + Math.min(domainImports, 4) * 5);
+  return dimension({
+    id: 'scanner_template_ecosystem',
+    title: 'Scanner template ecosystem',
+    score,
+    referenceProjects: ['ProjectDiscovery Nuclei', 'Semgrep', 'Prowler', 'MobSF'],
+    ours: `${scannerTemplates} scanner template(s), ${readyAdapters} ready adapter(s), ${runnableTemplates} runnable template(s), ${domainImports} domain import(s).`,
+    adopted: ['Template registry', 'Runtime profile readiness', 'SARIF/mobile/cloud/identity artifact imports', 'Fail-closed external execution'],
+    gaps: [
+      ...(runnableTemplates === 0 ? ['No external scanner template is runnable on this local node.'] : []),
+      'No mature result normalizers for Nuclei JSONL, Semgrep SARIF variants, Prowler outputs, or MobSF reports yet.',
+    ],
+    nextActions: ['Add one mature adapter at a time with a typed parser, evidence mapper, and focused fixture tests before broadening the template catalog.'],
+  });
+}
+
+function vulnerabilityLifecycleDimension(signals: RunSignals, deliveryStatus: string): ReferenceBenchmarkDimension {
+  const score = clamp(
+    25 +
+      Math.min(signals.findings, 5) * 6 +
+      Math.min(signals.confirmedFindings, 4) * 10 +
+      Math.min(signals.usefulEvidence, 5) * 5 +
+      Math.min(signals.reportBundles, 2) * 10 +
+      (deliveryStatus === 'ready' ? 10 : 0),
+  );
+  return dimension({
+    id: 'vulnerability_lifecycle',
+    title: 'Vulnerability lifecycle',
+    score,
+    referenceProjects: ['OWASP DefectDojo', 'Faraday', 'Dradis'],
+    ours:
+      `${signals.findings} finding(s), ${signals.confirmedFindings} confirmed, ` +
+      `${signals.usefulEvidence} useful evidence review(s), ${signals.reportBundles} report/export bundle(s).`,
+    adopted: ['Evidence-backed finding gate', 'Human validation state', 'Confirmed-only report default', 'Export bundle records'],
+    gaps: [
+      ...(signals.findings === 0 ? ['No finding lifecycle has started in this run.'] : []),
+      'No mature deduplication, retest workflow, SLA tracking, customer engagement model, or editable report template library yet.',
+    ],
+    nextActions: ['Model Product/Engagement/Test/Finding-style lifecycle records before adding team reporting and retest workflows.'],
+  });
+}
+
+function agentRuntimeEvalDimension(workers: number, workerTasks: number, traceSpans: number, evaluations: number): ReferenceBenchmarkDimension {
+  const score = clamp(25 + Math.min(workers, 3) * 8 + Math.min(workerTasks, 5) * 8 + Math.min(traceSpans, 10) * 3 + Math.min(evaluations, 3) * 8);
+  return dimension({
+    id: 'agent_runtime_eval',
+    title: 'Agent runtime and evaluation',
+    score,
+    referenceProjects: ['LangGraph', 'OpenAI Agents SDK', 'Microsoft PyRIT'],
+    ours: `${workers} configured Worker(s), ${workerTasks} Worker task(s), ${traceSpans} trace span(s), ${evaluations} evaluation(s).`,
+    adopted: ['Structured Worker envelope', 'Tool request validation', 'Trace and cost ledger', 'Run quality evaluation surface'],
+    gaps: [
+      ...(workerTasks === 0 ? ['No real Worker execution has been exercised in this run.'] : []),
+      ...(evaluations === 0 ? ['No stored run evaluation yet.'] : []),
+      'No durable resumable runtime, streaming trace UI, scorer library, prompt dataset, or automated regression benchmark suite yet.',
+    ],
+    nextActions: ['Build a small PyRIT-style scenario set and scorer loop around the existing Worker envelope before adding more autonomous behavior.'],
+  });
+}
+
+function productionDataModelDimension(signals: RunSignals): ReferenceBenchmarkDimension {
+  const score = clamp(30 + Math.min(signals.reportBundles, 2) * 5 + Math.min(signals.captureImports, 2) * 4 + Math.min(signals.domainImports, 4) * 4);
+  return dimension({
+    id: 'production_data_model',
+    title: 'Production data model and collaboration',
+    score,
+    referenceProjects: ['OWASP DefectDojo', 'OWASP Dependency-Track', 'Faraday'],
+    ours: `${signals.reportBundles} report/export bundle(s), ${signals.captureImports} capture import(s), ${signals.domainImports} domain import(s), SQLite JSON snapshot store.`,
+    adopted: ['Local-first state snapshot', 'Hashable export bundles', 'Raw-local-only evidence boundary'],
+    gaps: [
+      'Storage is still a single SQLite JSON snapshot, not relational tables with migrations, indexes, retention, and concurrent write boundaries.',
+      'No tenant, RBAC, SSO, project membership, cloud sync, or SBOM/component risk model yet.',
+    ],
+    nextActions: ['Split the snapshot store into explicit relational tables and migrations before introducing multi-user collaboration or cloud sync.'],
   });
 }
 
@@ -308,6 +423,24 @@ function projectBenchmarks(dimensions: ReferenceBenchmarkDimension[]): Reference
       remainingGap: joinGaps(byId.get('governed_tooling'), byId.get('ecosystem_breadth')),
     }),
     project({
+      id: 'zap_burp_playwright',
+      name: 'OWASP ZAP / Burp Suite / Playwright',
+      referenceRole: 'Mature browser, proxy, and DAST execution workflow.',
+      copiedPrinciples: ['Proxy and browser sessions as first-class operator objects', 'Captured traffic becomes reviewable evidence'],
+      deliberatelyAvoided: ['Implicit active scanning without run scope and approval gates'],
+      currentFit: minStatus(byId.get('browser_proxy_dast'), byId.get('local_desktop_runner')),
+      remainingGap: joinGaps(byId.get('browser_proxy_dast'), byId.get('local_desktop_runner')),
+    }),
+    project({
+      id: 'nuclei_semgrep_prowler_mobsf',
+      name: 'ProjectDiscovery Nuclei / Semgrep / Prowler / MobSF',
+      referenceRole: 'Rule, scanner, cloud, and mobile adapter maturity.',
+      copiedPrinciples: ['Template and profile metadata before execution', 'Domain artifacts normalized into evidence'],
+      deliberatelyAvoided: ['Raw scanner output becoming findings without parser, evidence, and review gates'],
+      currentFit: minStatus(byId.get('scanner_template_ecosystem'), byId.get('rigid_domain_depth')),
+      remainingGap: joinGaps(byId.get('scanner_template_ecosystem'), byId.get('rigid_domain_depth')),
+    }),
+    project({
       id: 'aida_cyberstrike_wondersuite',
       name: 'AIDA / CyberStrike / WonderSuite',
       referenceRole: 'Local UX, evidence cards, browser/proxy workflow, and reporting.',
@@ -324,6 +457,24 @@ function projectBenchmarks(dimensions: ReferenceBenchmarkDimension[]): Reference
       deliberatelyAvoided: ['Multi-agent role trees as a product premise'],
       currentFit: minStatus(byId.get('agent_worker_framework'), byId.get('trace_cost_eval')),
       remainingGap: joinGaps(byId.get('agent_worker_framework'), byId.get('trace_cost_eval')),
+    }),
+    project({
+      id: 'langgraph_openai_agents_pyrit',
+      name: 'LangGraph / OpenAI Agents SDK / Microsoft PyRIT',
+      referenceRole: 'Durable agent runtime, tool guardrails, tracing, and scenario evaluation.',
+      copiedPrinciples: ['Structured tool calls', 'Human gates before sensitive actions', 'Trace and evaluation as product surfaces'],
+      deliberatelyAvoided: ['Letting an Agent runtime become a bypass around platform policy'],
+      currentFit: minStatus(byId.get('agent_runtime_eval'), byId.get('trace_cost_eval'), byId.get('commercial_guardrails')),
+      remainingGap: joinGaps(byId.get('agent_runtime_eval'), byId.get('trace_cost_eval'), byId.get('commercial_guardrails')),
+    }),
+    project({
+      id: 'defectdojo_faraday_dradis',
+      name: 'OWASP DefectDojo / Faraday / Dradis',
+      referenceRole: 'Vulnerability management, collaboration, retest, and customer reporting lifecycle.',
+      copiedPrinciples: ['Findings need evidence and validation state', 'Reports are delivery artifacts, not raw logs'],
+      deliberatelyAvoided: ['Treating every scanner observation as a customer-facing vulnerability'],
+      currentFit: minStatus(byId.get('vulnerability_lifecycle'), byId.get('production_data_model')),
+      remainingGap: joinGaps(byId.get('vulnerability_lifecycle'), byId.get('production_data_model')),
     }),
     project({
       id: 'ai_engineering_from_scratch',
@@ -393,6 +544,9 @@ interface RunSignals {
   facts: number;
   intents: number;
   evidence: number;
+  httpExchangeEvidence: number;
+  browserSnapshots: number;
+  captureImports: number;
   usefulEvidence: number;
   findings: number;
   confirmedFindings: number;
@@ -419,6 +573,9 @@ function runSignalCounts(store: PlatformStore, runId: string): RunSignals {
     facts: Object.values(store.state.facts).filter((item) => item.runId === runId).length,
     intents: Object.values(store.state.intents).filter((item) => item.runId === runId).length,
     evidence: nonReportEvidence.length,
+    httpExchangeEvidence: nonReportEvidence.filter((item) => item.kind === 'http_exchange').length,
+    browserSnapshots: Object.values(store.state.browserSnapshots).filter((item) => item.runId === runId).length,
+    captureImports: Object.values(store.state.captureImports).filter((item) => item.runId === runId).length,
     usefulEvidence: nonReportEvidence.filter((item) => usefulReviews.has(item.id)).length,
     findings: findings.length,
     confirmedFindings: findings.filter((item) => item.validationState === 'confirmed').length,

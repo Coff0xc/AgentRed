@@ -27,17 +27,20 @@ import { AndroidManifestImportService } from './mobile/android-manifest-import-s
 import { AssessmentMissionControlService } from './mission/assessment-mission-control-service.js';
 import { OastService } from './oast/oast-service.js';
 import { DeliveryReadinessService } from './observability/delivery-readiness-service.js';
+import { EnterprisePentestScorerService } from './observability/enterprise-pentest-scorer-service.js';
 import { EvidenceQualityService } from './observability/evidence-quality-service.js';
 import { ObservabilityService } from './observability/observability-service.js';
 import { ReferenceBenchmarkService } from './observability/reference-benchmark-service.js';
 import { RunCapabilityRadarService } from './observability/run-capability-radar-service.js';
 import { WorkerLeaderboardService } from './observability/worker-leaderboard-service.js';
 import { WorkerEvaluationPlanService } from './observability/worker-evaluation-plan-service.js';
+import { VulnerabilityLifecycleService } from './observability/vulnerability-lifecycle-service.js';
 import { PocTemplateService } from './poc/poc-template-service.js';
 import { RunScorecardService } from './observability/run-scorecard-service.js';
 import { RunExportService } from './reports/run-export-service.js';
 import { ReportService } from './reports/report-service.js';
 import { EvidenceReplayService } from './replay/evidence-replay-service.js';
+import { RunSupervisorService } from './runtime/run-supervisor-service.js';
 import { RuntimeOperationsWorkbenchService } from './runtime/runtime-operations-workbench-service.js';
 import { SarifImportService } from './sast/sarif-import-service.js';
 import { WorkerSelectionPolicyService } from './scheduling/worker-selection-policy-service.js';
@@ -95,8 +98,11 @@ export interface Platform {
   scorecards: RunScorecardService;
   evidenceQuality: EvidenceQualityService;
   deliveryReadiness: DeliveryReadinessService;
+  enterprisePentestScorer: EnterprisePentestScorerService;
+  vulnerabilityLifecycle: VulnerabilityLifecycleService;
   referenceBenchmark: ReferenceBenchmarkService;
   missionControl: AssessmentMissionControlService;
+  supervisor: RunSupervisorService;
   runtimeOperationsWorkbench: RuntimeOperationsWorkbenchService;
   dispatcher: Dispatcher;
   autopilot: AutopilotService;
@@ -126,6 +132,7 @@ export function createPlatform(options: { databasePath?: string } = {}): Platfor
   const scorecards = new RunScorecardService(store);
   const evidenceQuality = new EvidenceQualityService(store);
   const deliveryReadiness = new DeliveryReadinessService(store);
+  const vulnerabilityLifecycle = new VulnerabilityLifecycleService(store, evidenceQuality);
   const evidence = new EvidenceEngine(store, events);
   const replay = new EvidenceReplayService(store, evidence);
   const evidenceReviews = new EvidenceReviewService(store, events);
@@ -176,6 +183,7 @@ export function createPlatform(options: { databasePath?: string } = {}): Platfor
     workerSelection,
   });
   const strategy = new StrategyService(store, graph, skills, pocs);
+  const enterprisePentestScorer = new EnterprisePentestScorerService(store, strategy);
   const surface = new AttackSurfaceService(store, graph, strategy, connectors);
   const searchPlan = new SearchPlanService(store, graph, strategy, surface, dispatcher, events);
   const agentFramework = new AgentFrameworkService(tools, toolPacks, toolbox, toolboxDoctor, connectors, skills, pocs);
@@ -225,6 +233,7 @@ export function createPlatform(options: { databasePath?: string } = {}): Platfor
     executionNode,
     localRunnerWorkbench,
   );
+  const supervisor = new RunSupervisorService(store, graph);
   return {
     store,
     events,
@@ -265,8 +274,11 @@ export function createPlatform(options: { databasePath?: string } = {}): Platfor
     scorecards,
     evidenceQuality,
     deliveryReadiness,
+    enterprisePentestScorer,
+    vulnerabilityLifecycle,
     referenceBenchmark,
     missionControl,
+    supervisor,
     runtimeOperationsWorkbench,
     dispatcher,
     autopilot: new AutopilotService(store, graph, strategy, dispatcher, events),
