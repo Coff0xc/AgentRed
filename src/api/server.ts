@@ -43,11 +43,12 @@ export interface ApiHandle {
 
 export async function startApiServer(
   platform: Platform,
-  options: { port: number; host?: string; authToken?: string },
+  options: { port: number; host?: string; authToken?: string; unsafeAllowNoAuthLocalOnly?: boolean },
 ): Promise<ApiHandle> {
   const host = options.host ?? '127.0.0.1';
+  const authToken = normalizeAuthToken(options.authToken, host, Boolean(options.unsafeAllowNoAuthLocalOnly));
   const server = createServer((request, response) => {
-    route(platform, request, response, options.authToken).catch((error: unknown) => {
+    route(platform, request, response, authToken).catch((error: unknown) => {
       if (error instanceof HttpError) {
         sendJson(response, error.statusCode, { error: error.message });
         return;
@@ -1282,6 +1283,9 @@ async function route(
     if (!evidence) {
       throw new HttpError(404, `Evidence not found: ${pathParts[1]}`);
     }
+    if (evidence.redactionState === 'raw_local_only') {
+      throw new HttpError(403, 'Raw-local-only evidence content is runner-local and cannot be read through the HTTP API');
+    }
     const blob = platform.evidence.readEvidenceBlob(evidence.id);
     sendJson(response, 200, { evidence, ...blob });
     return;
@@ -1332,6 +1336,17 @@ function readJson(request: IncomingMessage): Promise<unknown> {
     });
     request.on('error', reject);
   });
+}
+
+function normalizeAuthToken(authToken: string | undefined, host: string, unsafeAllowNoAuthLocalOnly: boolean): string | undefined {
+  const token = authToken?.trim();
+  if (token) {
+    return token;
+  }
+  if (unsafeAllowNoAuthLocalOnly && (host === '127.0.0.1' || host === 'localhost' || host === '::1')) {
+    return undefined;
+  }
+  throw new Error('PLATFORM_API_TOKEN is required. Use unsafeAllowNoAuthLocalOnly only for explicit local test harnesses.');
 }
 
 function readRawBody(request: IncomingMessage): Promise<Buffer> {
@@ -2424,7 +2439,7 @@ function validateEvidenceImport(runId: string, input: unknown): {
     runId,
     kind: validateEvidenceKind(object.kind),
     content: typeof object.content === 'string' ? object.content : JSON.stringify(object.content),
-    redactionState: validateRedactionState(object.redactionState),
+    redactionState: validateImportedEvidenceRedactionState(object.redactionState),
     toolCallId: optionalString(object.toolCallId, 'toolCallId'),
     cloudUri: optionalString(object.cloudUri, 'cloudUri'),
   };
@@ -2601,6 +2616,14 @@ function validateRedactionState(input: unknown): RedactionState {
     throw new HttpError(400, 'redactionState is invalid');
   }
   return input;
+}
+
+function validateImportedEvidenceRedactionState(input: unknown): RedactionState {
+  const state = validateRedactionState(input);
+  if (state === 'safe_for_cloud') {
+    throw new HttpError(400, 'safe_for_cloud evidence must be produced by a trusted redaction workflow');
+  }
+  return state;
 }
 
 function validateSeverity(input: unknown): Severity {

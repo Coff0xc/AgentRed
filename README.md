@@ -100,7 +100,7 @@ Open:
 http://127.0.0.1:4317/app
 ```
 
-If `PLATFORM_API_TOKEN` is not set, the server generates a one-time local token and prints it at startup. `/` and `/health` are unauthenticated; API data and mutations require `Authorization: Bearer <token>` or `X-Platform-Token: <token>`.
+`PLATFORM_API_TOKEN` is required and must be generated outside the process; the server refuses to start without it and never prints the token value. `/` and `/health` are unauthenticated; API data and mutations require `Authorization: Bearer <token>` or `X-Platform-Token: <token>`.
 
 ### First Scoped Run
 
@@ -293,7 +293,7 @@ See [docs/SECURITY_MODEL.md](docs/SECURITY_MODEL.md) for the detailed model.
 | --- | --- | --- |
 | `PORT` | `4317` | Local API port. |
 | `PLATFORM_DB_PATH` | `.local/platform.db` | SQLite state path. |
-| `PLATFORM_API_TOKEN` | generated at startup | Local API bearer token. |
+| `PLATFORM_API_TOKEN` | required | Local API bearer token. Generate it outside the process and keep it out of logs. |
 | `OPENAI_API_KEY` | unset | Provider key for future or CLI Worker integrations; keep it in the API process environment. |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Optional OpenAI-compatible base URL. |
 | `OPENAI_MODEL` | `gpt-4.1-mini` | Optional default model value for Worker integrations. |
@@ -473,7 +473,7 @@ npm run dev
 http://127.0.0.1:4317/app
 ```
 
-如果没有设置 `PLATFORM_API_TOKEN`，服务启动时会生成一次性本地 token 并打印到终端。`/` 和 `/health` 不需要认证；API 数据和写操作需要 `Authorization: Bearer <token>` 或 `X-Platform-Token: <token>`。
+`PLATFORM_API_TOKEN` 是必填项，必须在进程外生成；服务缺失该变量会拒绝启动，并且不会打印 token 明文。`/` 和 `/health` 不需要认证；API 数据和写操作需要 `Authorization: Bearer <token>` 或 `X-Platform-Token: <token>`。
 
 ### 第一次授权运行
 
@@ -666,7 +666,7 @@ Fail-closed 行为：
 | --- | --- | --- |
 | `PORT` | `4317` | 本地 API 端口。 |
 | `PLATFORM_DB_PATH` | `.local/platform.db` | SQLite 状态路径。 |
-| `PLATFORM_API_TOKEN` | 启动时生成 | 本地 API bearer token。 |
+| `PLATFORM_API_TOKEN` | 必填 | 本地 API bearer token。必须在进程外生成，并避免进入日志。 |
 | `OPENAI_API_KEY` | 未设置 | 未来或 CLI Worker 使用的 provider key；必须保存在 API 进程环境变量里。 |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | 可选 OpenAI-compatible base URL。 |
 | `OPENAI_MODEL` | `gpt-4.1-mini` | 可选 Worker 默认模型。 |

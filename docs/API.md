@@ -12,7 +12,7 @@ or:
 X-Platform-Token: <token>
 ```
 
-Set the token with `PLATFORM_API_TOKEN`. The dev server generates and prints a one-time token when the variable is not set.
+Set the token with `PLATFORM_API_TOKEN`. The dev server refuses to start without it and never prints the token value.
 
 Errors are returned as JSON:
 
@@ -2901,7 +2901,7 @@ Lists allowed, blocked, and approval-required tool audit records for a run.
 
 ## GET /evidence/{id}/content
 
-Reads local evidence blob content. This endpoint is local-runner only and requires the API token.
+Reads local evidence blob content only after the evidence has crossed the redaction boundary. This endpoint is local-runner only and requires the API token. Evidence marked `raw_local_only` returns `403` and must stay behind the local runner/evidence viewer boundary.
 
 The Operator Console uses this endpoint in the Evidence Viewer panel so a human reviewer can inspect a bounded local preview, encoding, size, SHA-256 hash, and redaction state before attaching evidence to a Finding or Access Review.
 
@@ -3043,8 +3043,7 @@ Behavior:
 
 - includes run metadata, scope, facts, intents, hints, findings, evidence metadata, evidence reviews, reports, approvals, tool audit, sessions, imports, access reviews, and tool-pack runs
 - `findingScope` defaults to `confirmed_only`; rejected findings are always excluded
-- evidence content is omitted by default
-- when `includeEvidenceContent` is true, only UTF-8 evidence that is not `raw_local_only` and is no larger than 200 KB is embedded
+- evidence content embedding is disabled for HTTP API exports; exports carry evidence ids, metadata, hashes, reviews, and report references
 - `raw_local_only` evidence content is never included; the export records how many such items were omitted
 - the generated bundle itself is hashable evidence with a returned `evidenceId` and `sha256`
 

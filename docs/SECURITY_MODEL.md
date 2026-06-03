@@ -4,7 +4,7 @@ This platform is for authorized security testing only.
 
 ## Fail-Closed Rules
 
-- API routes other than `/` and `/health` require a local bearer token when the server is started with one.
+- API routes other than `/` and `/health` require a configured local bearer token. The dev entrypoint fails closed when `PLATFORM_API_TOKEN` is missing; only explicit local test harnesses can opt into unsafe no-auth localhost mode.
 - `/app` and its static assets are also unauthenticated, but they are only a local shell; data and mutations still call token-protected API routes.
 - Out-of-scope targets are blocked before tool execution.
 - Denylist entries override allowlist entries.
@@ -87,11 +87,11 @@ Evidence has a redaction state:
 
 - `raw_local_only`: never upload by default.
 - `redacted`: safe to use in reports and cloud indexes.
-- `safe_for_cloud`: explicitly approved for cloud sync.
+- `safe_for_cloud`: explicitly approved for cloud sync by a trusted future redaction workflow; manual API imports cannot self-attest this state.
 
-Every evidence item stores a SHA-256 hash so reports can reference reproducible local artifacts without uploading raw content. Report bundles are also stored as `replay_bundle` evidence. Graph snapshots expose evidence metadata; local blob content is available only through the local Evidence Engine/API.
+Every evidence item stores a SHA-256 hash so reports can reference reproducible local artifacts without uploading raw content. Report bundles are also stored as `replay_bundle` evidence. Graph snapshots expose evidence metadata; local blob content is available only through the local Evidence Engine, and the HTTP content API refuses `raw_local_only` blobs.
 
-Run exports are also stored as `replay_bundle` evidence. They include broad run metadata for handoff, but evidence blob content is omitted by default. If an operator explicitly includes evidence content, the export still excludes `raw_local_only` evidence and only embeds bounded UTF-8 content that has already been marked `redacted` or `safe_for_cloud`.
+Run exports are also stored as `replay_bundle` evidence. They include broad run metadata for handoff, but evidence blob content embedding is disabled in HTTP API exports. Exports carry evidence ids, metadata, hashes, reviews, and report references while excluding `raw_local_only` content.
 
 Run events are for operator visibility and workflow reconstruction. They should point to graph entities and evidence IDs, but they must not become a place to store raw HTTP bodies, secrets, credentials, or full command output.
 

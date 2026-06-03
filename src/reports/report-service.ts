@@ -3,6 +3,7 @@ import type { EvidenceEngine } from '../evidence/evidence-engine.js';
 import type { RunEventService } from '../events/run-event-service.js';
 import type { GraphServer } from '../graph/graph-server.js';
 import type { FindingService } from '../findings/finding-service.js';
+import type { EvidenceQualityService } from '../observability/evidence-quality-service.js';
 import type { ObservabilityService } from '../observability/observability-service.js';
 
 export type ReportFindingScope = 'confirmed_only' | 'candidate_and_confirmed';
@@ -12,6 +13,7 @@ export class ReportService {
     private readonly graph: GraphServer,
     private readonly findings: FindingService,
     private readonly evidence: EvidenceEngine,
+    private readonly evidenceQuality: EvidenceQualityService,
     private readonly events?: RunEventService,
     private readonly observability?: ObservabilityService,
   ) {}
@@ -29,6 +31,13 @@ export class ReportService {
     const snapshot = this.graph.getGraph(input.runId);
     const findingScope = input.findingScope || 'confirmed_only';
     const findings = this.findings.list(input.runId).filter((finding) => shouldIncludeFinding(finding, findingScope));
+    if (findingScope === 'confirmed_only' && findings.length > 0) {
+      const gates = new Map(this.evidenceQuality.get(input.runId).findingGates.map((gate) => [gate.findingId, gate]));
+      const blocked = findings.filter((finding) => !gates.get(finding.id)?.deliveryReady);
+      if (blocked.length > 0) {
+        throw new Error(`Report requires delivery-ready findings: ${blocked.map((finding) => finding.id).join(', ')}`);
+      }
+    }
     const referencedEvidenceIds = new Set(findings.flatMap((finding) => finding.evidenceIds));
     for (const evidenceId of referencedEvidenceIds) {
       const evidence = snapshot.evidence.find((item) => item.id === evidenceId);

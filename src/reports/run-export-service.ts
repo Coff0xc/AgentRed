@@ -4,6 +4,7 @@ import type { EvidenceEngine } from '../evidence/evidence-engine.js';
 import type { RunEventService } from '../events/run-event-service.js';
 import type { FindingService } from '../findings/finding-service.js';
 import type { GraphServer } from '../graph/graph-server.js';
+import type { EvidenceQualityService } from '../observability/evidence-quality-service.js';
 import type { PlatformStore } from '../storage/store.js';
 import type { ReportFindingScope } from './report-service.js';
 
@@ -19,6 +20,7 @@ export class RunExportService {
     private readonly graph: GraphServer,
     private readonly findings: FindingService,
     private readonly evidence: EvidenceEngine,
+    private readonly evidenceQuality: EvidenceQualityService,
     private readonly events?: RunEventService,
   ) {}
 
@@ -26,11 +28,18 @@ export class RunExportService {
     const snapshot = this.graph.getGraph(input.runId);
     const findingScope = input.findingScope || 'confirmed_only';
     const findings = this.findings.list(input.runId).filter((finding) => shouldIncludeFinding(finding, findingScope));
+    if (findingScope === 'confirmed_only' && findings.length > 0) {
+      const gates = new Map(this.evidenceQuality.get(input.runId).findingGates.map((gate) => [gate.findingId, gate]));
+      const blocked = findings.filter((finding) => !gates.get(finding.id)?.deliveryReady);
+      if (blocked.length > 0) {
+        throw new Error(`Run export requires delivery-ready findings: ${blocked.map((finding) => finding.id).join(', ')}`);
+      }
+    }
     const approvals = byRun(Object.values(this.store.state.approvals), input.runId);
     const toolInvocations = byRun(Object.values(this.store.state.toolInvocations), input.runId);
     const evidenceReviews = byRun(Object.values(this.store.state.evidenceReviews), input.runId);
     const reports = snapshot.evidence.filter((item) => item.kind === 'replay_bundle');
-    const evidenceContent = input.includeEvidenceContent ? this.safeEvidenceContent(snapshot.evidence) : {};
+    const evidenceContent = {};
     const bundle = {
       schema: 'run-export.v1',
       generatedAt: nowIso(),
@@ -69,8 +78,9 @@ export class RunExportService {
       androidManifestImports: byRun(Object.values(this.store.state.androidManifestImports), input.runId),
       policy: {
         findingScope,
-        includeEvidenceContent: Boolean(input.includeEvidenceContent),
+        includeEvidenceContent: false,
         rawLocalOnlyEvidenceContentIncluded: false,
+        evidenceContentEmbeddingDisabled: true,
       },
     };
     const exportEvidence = this.evidence.addEvidence({
@@ -86,8 +96,8 @@ export class RunExportService {
       evidenceId: exportEvidence.id,
       sha256: exportEvidence.sha256,
       findingScope,
-      includeEvidenceContent: Boolean(input.includeEvidenceContent),
-      includedEvidenceContent: Object.keys(evidenceContent).length,
+      includeEvidenceContent: false,
+      includedEvidenceContent: 0,
       omittedRawLocalOnly: snapshot.evidence.filter((item) => item.redactionState === 'raw_local_only').length,
       counts: {
         facts: snapshot.facts.length,
@@ -119,24 +129,6 @@ export class RunExportService {
     );
   }
 
-  private safeEvidenceContent(evidenceItems: Evidence[]): Record<string, unknown> {
-    const output: Record<string, unknown> = {};
-    for (const item of evidenceItems) {
-      if (item.redactionState === 'raw_local_only') {
-        continue;
-      }
-      const blob = this.store.state.evidenceBlobs[item.localUri];
-      if (!blob || blob.encoding !== 'utf8' || blob.sizeBytes > 200_000) {
-        continue;
-      }
-      output[item.id] = {
-        encoding: blob.encoding,
-        sizeBytes: blob.sizeBytes,
-        content: blob.content,
-      };
-    }
-    return output;
-  }
 }
 
 function byRun<T extends { runId: string }>(items: T[], runId: string): T[] {

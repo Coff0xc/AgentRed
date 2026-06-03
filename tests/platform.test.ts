@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 import { startApiServer } from '../src/api/server.js';
+import { resolveApiStartupConfig } from '../src/api/startup-config.js';
 import { Dispatcher } from '../src/dispatcher/dispatcher.js';
 import { createPlatform } from '../src/platform.js';
 import { evaluateScope } from '../src/scope/policy.js';
@@ -502,7 +503,38 @@ test('ReportService rejects raw-local-only evidence in report bundles', () => {
   platform.evidenceReviews.review({ evidenceId: evidence.id, status: 'useful', reviewer: 'test' });
   platform.findings.updateValidationState(unsafeFinding.id, 'confirmed');
 
-  assert.throws(() => platform.reports.generate({ runId: run.id, format: 'src' }), /redacted/i);
+  assert.throws(() => platform.reports.generate({ runId: run.id, format: 'src' }), /delivery-ready/i);
+});
+
+test('ReportService and RunExport require delivery-ready confirmed findings', () => {
+  const platform = createPlatform();
+  const run = platform.graph.createRun({
+    target: 'https://app.example.com',
+    goal: 'Gate commercial delivery on evidence quality',
+    scopePolicy: policy,
+    workerPool: [{ name: 'mock-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+  const weakEvidence = platform.evidence.addEvidence({
+    runId: run.id,
+    kind: 'command_output',
+    content: 'operator note without replay support',
+    redactionState: 'raw_local_only',
+  });
+  platform.evidenceReviews.review({ evidenceId: weakEvidence.id, status: 'useful', reviewer: 'test' });
+  const weakFinding = platform.findings.proposeFinding({
+    runId: run.id,
+    title: 'Confirmed but not reproducible',
+    severity: 'high',
+    confidence: 'likely',
+    affectedAssets: ['https://app.example.com/profile'],
+    evidenceIds: [weakEvidence.id],
+    reproSteps: ['Read the operator note'],
+    impact: 'A high-risk report should not ship without reproduction evidence',
+    remediation: 'Attach replayable or reproduction-supporting evidence',
+  });
+  platform.findings.updateValidationState(weakFinding.id, 'confirmed');
+  assert.throws(() => platform.reports.generate({ runId: run.id, format: 'enterprise' }), /delivery-ready/i);
+  assert.throws(() => platform.runExports.generate({ runId: run.id }), /delivery-ready/i);
 });
 
 test('Dispatcher advances a run through bootstrap, reason, explore, and complete using a mock Agent Worker', async () => {
@@ -1059,6 +1091,32 @@ test('REST API creates runs, records hints, returns graphs, and generates report
   }
 });
 
+test('REST API refuses to start without an API token unless explicitly local-unsafe', async () => {
+  const platform = createPlatform();
+  await assert.rejects(() => startApiServer(platform, { port: 0 }), /PLATFORM_API_TOKEN is required/);
+  const api = await startApiServer(platform, { port: 0, unsafeAllowNoAuthLocalOnly: true });
+  try {
+    const health = await fetch(`${api.url}/health`);
+    assert.equal(health.status, 200);
+  } finally {
+    await api.close();
+  }
+});
+
+test('startup config requires an explicit token and never synthesizes one', () => {
+  assert.throws(() => resolveApiStartupConfig({}), /PLATFORM_API_TOKEN is required/);
+  assert.throws(() => resolveApiStartupConfig({ PLATFORM_API_TOKEN: 'test-token', PORT: 'not-a-port' }), /PORT must be/);
+
+  const config = resolveApiStartupConfig({
+    PLATFORM_API_TOKEN: '  test-token  ',
+    PLATFORM_DB_PATH: 'custom/platform.db',
+    PORT: '4321',
+  });
+  assert.equal(config.authToken, 'test-token');
+  assert.equal(config.databasePath, 'custom/platform.db');
+  assert.equal(config.port, 4321);
+});
+
 test('REST API reports Agent Worker runtime health for a run', async () => {
   const platform = createPlatform();
   const api = await startApiServer(platform, { port: 0, authToken: 'test-token' });
@@ -1398,7 +1456,7 @@ test('REST API returns a run review bundle for approvals, audit, evidence, findi
     content: 'redacted reviewer evidence',
     redactionState: 'redacted',
   });
-  platform.findings.proposeFinding({
+  const finding = platform.findings.proposeFinding({
     runId: run.id,
     title: 'Reviewable finding',
     severity: 'medium',
@@ -1409,6 +1467,8 @@ test('REST API returns a run review bundle for approvals, audit, evidence, findi
     impact: 'The review bundle should expose this finding',
     remediation: 'Keep findings tied to evidence',
   });
+  platform.evidenceReviews.review({ evidenceId: evidence.id, status: 'useful', reviewer: 'test' });
+  platform.findings.updateValidationState(finding.id, 'confirmed');
   const report = platform.reports.generate({ runId: run.id, format: 'src' });
   const approval = await platform.tools.invoke({
     runId: run.id,
@@ -1495,6 +1555,17 @@ test('REST API imports evidence and proposes evidence-backed findings', async ()
     assert.equal(evidence.kind, 'http_exchange');
     assert.match(evidence.sha256, /^[a-f0-9]{64}$/);
 
+    const safeForCloudResponse = await fetch(`${api.url}/runs/${run.id}/evidence`, {
+      method: 'POST',
+      headers: authHeaders,
+      body: JSON.stringify({
+        kind: 'command_output',
+        redactionState: 'safe_for_cloud',
+        content: 'operator-provided evidence cannot self-attest cloud safety',
+      }),
+    });
+    assert.equal(safeForCloudResponse.status, 400);
+
     const emptyFindingResponse = await fetch(`${api.url}/runs/${run.id}/findings`, {
       method: 'POST',
       headers: authHeaders,
@@ -1557,6 +1628,31 @@ test('REST API imports evidence and proposes evidence-backed findings', async ()
     assert.equal(review.findings[0]?.title, 'Imported profile metadata exposure');
     assert.deepEqual(review.findings[0]?.evidenceIds, [evidence.id]);
     assert.equal(review.findings[0]?.validationState, 'confirmed');
+  } finally {
+    await api.close();
+  }
+});
+
+test('REST API blocks raw-local-only evidence content reads', async () => {
+  const platform = createPlatform();
+  const run = platform.graph.createRun({
+    target: 'https://app.example.com',
+    goal: 'Protect raw local evidence content',
+    scopePolicy: policy,
+    workerPool: [{ name: 'mock-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+  const screenshot = platform.evidence.addEvidence({
+    runId: run.id,
+    kind: 'screenshot',
+    content: Buffer.from('raw screenshot bytes'),
+    redactionState: 'raw_local_only',
+  });
+  const api = await startApiServer(platform, { port: 0, authToken: 'test-token' });
+  try {
+    const response = await fetch(`${api.url}/evidence/${screenshot.id}/content`, {
+      headers: { authorization: 'Bearer test-token' },
+    });
+    assert.equal(response.status, 403);
   } finally {
     await api.close();
   }
@@ -2304,6 +2400,68 @@ test('vulnerability lifecycle reaches retest readiness after confirmed report an
   assert.ok(report.nextActions.some((action) => /retest/i.test(action)));
   assert.equal(report.audit.generatesReports, false);
   assert.equal(report.audit.invokesTools, false);
+});
+
+test('vulnerability lifecycle tracks report and export delivery per finding', () => {
+  const platform = createPlatform();
+  const run = platform.graph.createRun({
+    target: 'https://app.example.com',
+    goal: 'Avoid global report/export lifecycle false positives',
+    scopePolicy: policy,
+    workerPool: [{ name: 'mock-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+  const firstEvidence = platform.evidence.addEvidence({
+    runId: run.id,
+    kind: 'http_exchange',
+    redactionState: 'redacted',
+    content: JSON.stringify({
+      request: { method: 'GET', target: 'https://app.example.com/profile' },
+      response: { status: 200, bodyPreview: 'first issue evidence' },
+    }),
+  });
+  const secondEvidence = platform.evidence.addEvidence({
+    runId: run.id,
+    kind: 'http_exchange',
+    redactionState: 'redacted',
+    content: JSON.stringify({
+      request: { method: 'GET', target: 'https://app.example.com/admin' },
+      response: { status: 200, bodyPreview: 'second issue evidence' },
+    }),
+  });
+  platform.evidenceReviews.review({ evidenceId: firstEvidence.id, status: 'useful', reviewer: 'test' });
+  platform.evidenceReviews.review({ evidenceId: secondEvidence.id, status: 'useful', reviewer: 'test' });
+  const first = platform.findings.proposeFinding({
+    runId: run.id,
+    title: 'First reported authz finding',
+    severity: 'critical',
+    confidence: 'likely',
+    affectedAssets: ['https://app.example.com/profile'],
+    evidenceIds: [firstEvidence.id],
+    reproSteps: ['Replay first evidence'],
+    impact: 'First issue impact',
+    remediation: 'Fix first issue',
+  });
+  const second = platform.findings.proposeFinding({
+    runId: run.id,
+    title: 'Second unreported authz finding',
+    severity: 'critical',
+    confidence: 'likely',
+    affectedAssets: ['https://app.example.com/admin'],
+    evidenceIds: [secondEvidence.id],
+    reproSteps: ['Replay second evidence'],
+    impact: 'Second issue impact',
+    remediation: 'Fix second issue',
+  });
+  platform.findings.updateValidationState(first.id, 'confirmed');
+  platform.reports.generate({ runId: run.id, format: 'enterprise' });
+  platform.runExports.generate({ runId: run.id, findingScope: 'confirmed_only' });
+  platform.findings.updateValidationState(second.id, 'confirmed');
+
+  const report = platform.vulnerabilityLifecycle.get(run.id);
+  const findings = new Map(report.findings.map((item) => [item.findingId, item]));
+  assert.equal(findings.get(first.id)?.phase, 'retest');
+  assert.equal(findings.get(second.id)?.phase, 'delivery');
+  assert.ok(findings.get(second.id)?.nextActions.some((action) => /report bundle/i.test(action)));
 });
 
 class StaticWorker implements WorkerAdapter {

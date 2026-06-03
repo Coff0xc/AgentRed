@@ -1,14 +1,11 @@
-import { randomBytes } from 'node:crypto';
-
+import { resolveApiStartupConfig } from './api/startup-config.js';
 import { startApiServer } from './api/server.js';
 import { createPlatform } from './platform.js';
 
-const databasePath = process.env.PLATFORM_DB_PATH ?? '.local/platform.db';
-const port = Number(process.env.PORT ?? 4317);
-const authToken = process.env.PLATFORM_API_TOKEN ?? randomBytes(24).toString('hex');
+const config = resolveApiStartupConfig(process.env);
 
-const platform = createPlatform({ databasePath });
-const api = await startApiServer(platform, { port, authToken });
+const platform = createPlatform({ databasePath: config.databasePath });
+const api = await startApiServer(platform, { port: config.port, authToken: config.authToken });
 
 console.log(`AgentRed API listening on ${api.url}`);
-console.log(`Local API token: ${authToken}`);
+console.log('Local API token loaded from PLATFORM_API_TOKEN (value hidden).');
