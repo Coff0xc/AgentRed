@@ -2119,7 +2119,7 @@ Returns the desktop review bundle for one run:
 - `oastCallbacks`
 - `credentialReferences`
 - `accessReviews`
-- `captureImports`, `browserSnapshots`, `sarifImports`, `androidManifestImports`, `cloudIamImports`, `identityGraphImports`, `toolPackRuns`, and `connectorRuns`
+- `captureImports`, `browserSnapshots`, `sarifImports`, `scannerResultImports`, `androidManifestImports`, `cloudIamImports`, `identityGraphImports`, `toolPackRuns`, and `connectorRuns`
 - `observability`
 
 This endpoint is a read model for the Operator Console and future Tauri desktop shell. It keeps review screens from making many separate calls.
@@ -2227,6 +2227,34 @@ The import service:
 - leaves validation to human review before reporting
 
 This is the first AutoRedTeam-style CI/SARIF ingestion path. It does not upload source code and it does not treat static-analysis results as confirmed impact.
+
+## Scanner Result Imports
+
+Scanner Result Imports are typed adapter parsers for external scanner output. They let a local runner or operator import normalized Nuclei JSONL, Semgrep JSON, or generic scanner JSON without giving the agent raw scanner authority.
+
+```http
+GET /runs/{id}/scanner-result-imports
+POST /runs/{id}/scanner-result-imports
+```
+
+Import request:
+
+```json
+{
+  "source": "nuclei.jsonl",
+  "engine": "nuclei",
+  "createFindings": true,
+  "content": "{\"template-id\":\"cves/example\",\"matched-at\":\"https://app.example.com\",\"info\":{\"name\":\"Example\",\"severity\":\"high\"}}\n"
+}
+```
+
+Supported `engine` values:
+
+- `nuclei`: JSONL output with template id, matched target, `info.name`, `info.severity`, classification, and remediation fields.
+- `semgrep`: Semgrep JSON output with `results[]`, `check_id`, path/start location, severity, message, and metadata fix fields.
+- `generic`: JSON object or array with `results`, `findings`, or `issues` containing title/name, severity/risk, target/url/asset/location, description/message, and remediation/fix fields.
+
+The import service hashes the raw scanner output, redacts sensitive values, stores a bounded `command_output` evidence artifact, records high/critical counts, and optionally creates up to 25 evidence-backed candidate Findings. Imported scanner findings are never marked confirmed automatically; human validation and delivery gates still apply before report/export.
 
 ## Android Manifest Imports
 

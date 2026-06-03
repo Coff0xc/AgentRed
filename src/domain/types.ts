@@ -10,6 +10,8 @@ export type CredentialReferenceKind = 'vault_reference' | 'header_placeholder' |
 export type AccessReviewStatus = 'draft' | 'evidence_ready' | 'differential_observed' | 'no_difference' | 'needs_review';
 export type AccessReviewSide = 'baseline' | 'comparison';
 export type SarifImportStatus = 'imported';
+export type ScannerResultImportStatus = 'imported';
+export type ScannerResultEngine = 'nuclei' | 'semgrep' | 'generic';
 export type CaptureImportStatus = 'imported';
 export type AndroidManifestImportStatus = 'imported';
 export type ProgramScopeImportStatus = 'imported';
@@ -143,6 +145,7 @@ export type RunEventType =
   | 'identity.graph.imported'
   | 'capture.imported'
   | 'sarif.imported'
+  | 'scanner.result.imported'
   | 'evidence.reviewed';
 export type RunPhase = 'bootstrapping' | 'reasoning' | 'queued' | 'exploring' | 'awaiting_approval' | 'completed' | 'stopped';
 
@@ -242,6 +245,22 @@ export interface SarifImport {
   runs: number;
   rules: number;
   results: number;
+  importedFindings: number;
+  findingIds: string[];
+  createdAt: string;
+}
+
+export interface ScannerResultImport {
+  id: string;
+  runId: string;
+  source: string;
+  engine: ScannerResultEngine;
+  status: ScannerResultImportStatus;
+  evidenceId: string;
+  inputSha256: string;
+  results: number;
+  highOrCritical: number;
+  affectedAssets: string[];
   importedFindings: number;
   findingIds: string[];
   createdAt: string;

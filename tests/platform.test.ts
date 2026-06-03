@@ -2309,6 +2309,139 @@ test('enterprise pentest scorer improves after role evidence, OAST, and high-ris
   assert.equal(scenarios.get('ai_agent_security')?.status, 'pass');
 });
 
+test('scanner result import normalizes Nuclei JSONL into evidence-backed candidate findings', () => {
+  const platform = createPlatform();
+  const run = platform.graph.createRun({
+    target: 'https://app.example.com',
+    goal: 'Import external scanner results through typed adapters',
+    scopePolicy: policy,
+    workerPool: [{ name: 'mock-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+  const result = platform.scannerResults.import({
+    runId: run.id,
+    source: 'nuclei.jsonl',
+    engine: 'nuclei',
+    createFindings: true,
+    content: [
+      JSON.stringify({
+        'template-id': 'cves/2024/CVE-2024-0001',
+        'matched-at': 'https://app.example.com/admin?token=raw-secret',
+        info: {
+          name: 'Critical admin exposure',
+          severity: 'critical',
+          description: 'Admin endpoint exposes sensitive tenant metadata',
+          remediation: 'Restrict the endpoint and add authorization checks.',
+          classification: { 'cwe-id': ['CWE-862'], 'cvss-score': '9.8' },
+        },
+      }),
+    ].join('\n'),
+  });
+
+  assert.equal(result.importRecord.engine, 'nuclei');
+  assert.equal(result.importRecord.results, 1);
+  assert.equal(result.importRecord.highOrCritical, 1);
+  assert.equal(result.findingIds.length, 1);
+  const finding = platform.store.state.findings[result.findingIds[0]];
+  assert.equal(finding.validationState, 'candidate');
+  assert.equal(finding.severity, 'critical');
+  assert.equal(finding.confidence, 'likely');
+  const evidenceContent = platform.evidence.readEvidenceContent(result.evidenceId).toString('utf8');
+  assert.ok(evidenceContent.includes('scanner.result.import'));
+  assert.ok(!evidenceContent.includes('raw-secret'));
+  assert.ok(platform.events.list(run.id).some((event) => event.type === 'scanner.result.imported'));
+});
+
+test('REST API imports Semgrep scanner results and includes them in the review bundle', async () => {
+  const platform = createPlatform();
+  const run = platform.graph.createRun({
+    target: 'https://app.example.com',
+    goal: 'Review typed scanner adapter output',
+    scopePolicy: policy,
+    workerPool: [{ name: 'mock-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+  const api = await startApiServer(platform, { port: 0, authToken: 'test-token' });
+  const authHeaders = { authorization: 'Bearer test-token', 'content-type': 'application/json' };
+  try {
+    const response = await fetch(`${api.url}/runs/${run.id}/scanner-result-imports`, {
+      method: 'POST',
+      headers: authHeaders,
+      body: JSON.stringify({
+        source: 'semgrep.json',
+        engine: 'semgrep',
+        createFindings: true,
+        content: {
+          results: [
+            {
+              check_id: 'javascript.express.security.audit.path-traversal',
+              path: 'src/routes/files.ts',
+              start: { line: 42 },
+              extra: {
+                severity: 'ERROR',
+                message: 'User-controlled path reaches file read sink',
+                metadata: { fix: 'Normalize the path and enforce an allowlisted base directory.' },
+              },
+            },
+          ],
+        },
+      }),
+    });
+    assert.equal(response.status, 201);
+    const body = (await response.json()) as { importRecord: { importedFindings: number; highOrCritical: number }; findingIds: string[] };
+    assert.equal(body.importRecord.importedFindings, 1);
+    assert.equal(body.importRecord.highOrCritical, 1);
+    assert.equal(body.findingIds.length, 1);
+
+    const list = (await (await fetch(`${api.url}/runs/${run.id}/scanner-result-imports`, { headers: authHeaders })).json()) as unknown[];
+    assert.equal(list.length, 1);
+
+    const review = (await (await fetch(`${api.url}/runs/${run.id}/review`, { headers: authHeaders })).json()) as {
+      scannerResultImports: unknown[];
+      findings: Array<{ id: string; validationState: string }>;
+    };
+    assert.equal(review.scannerResultImports.length, 1);
+    assert.ok(review.findings.some((finding) => finding.id === body.findingIds[0] && finding.validationState === 'candidate'));
+  } finally {
+    await api.close();
+  }
+});
+
+test('scanner result import supports generic JSON without forced finding creation', () => {
+  const platform = createPlatform();
+  const run = platform.graph.createRun({
+    target: 'https://api.example.com',
+    goal: 'Import generic scanner output for triage',
+    scopePolicy: policy,
+    workerPool: [{ name: 'mock-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+  const result = platform.scannerResults.import({
+    runId: run.id,
+    source: 'custom-scanner.json',
+    engine: 'generic',
+    createFindings: false,
+    content: {
+      findings: [
+        {
+          id: 'api-bola-001',
+          title: 'Potential BOLA on account endpoint',
+          severity: 'high',
+          target: 'https://api.example.com/accounts/123?access_token=raw-secret',
+          description: 'Scanner observed inconsistent object authorization responses.',
+          remediation: 'Validate object ownership before returning account data.',
+        },
+      ],
+    },
+  });
+
+  assert.equal(result.importRecord.engine, 'generic');
+  assert.equal(result.importRecord.results, 1);
+  assert.equal(result.importRecord.highOrCritical, 1);
+  assert.equal(result.importRecord.importedFindings, 0);
+  assert.equal(result.findingIds.length, 0);
+  const evidenceContent = platform.evidence.readEvidenceContent(result.evidenceId).toString('utf8');
+  assert.ok(evidenceContent.includes('api-bola-001'));
+  assert.ok(!evidenceContent.includes('raw-secret'));
+});
+
 test('vulnerability lifecycle flags duplicate high-risk candidates before validation', () => {
   const platform = createPlatform();
   const run = platform.graph.createRun({

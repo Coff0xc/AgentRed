@@ -23,6 +23,7 @@ import type {
   RunToolboxBundleBinding,
   RunPocTemplateBinding,
   SarifImport,
+  ScannerResultImport,
   EvidenceReview,
   RunSkillBinding,
   Evidence,
@@ -74,6 +75,7 @@ export interface PlatformState {
   captureImports: Record<string, CaptureImport>;
   programScopeImports: Record<string, ProgramScopeImport>;
   sarifImports: Record<string, SarifImport>;
+  scannerResultImports: Record<string, ScannerResultImport>;
   registeredConnectors: Record<string, RegisteredConnector>;
   runConnectorBindings: Record<string, RunConnectorBinding>;
   registeredToolboxBundles: Record<string, RegisteredToolboxBundle>;
@@ -120,6 +122,7 @@ export function emptyState(): PlatformState {
     captureImports: {},
     programScopeImports: {},
     sarifImports: {},
+    scannerResultImports: {},
     registeredConnectors: {},
     runConnectorBindings: {},
     registeredToolboxBundles: {},
@@ -164,6 +167,7 @@ function normalizeState(state: Partial<PlatformState>): PlatformState {
     captureImports: state.captureImports ?? {},
     programScopeImports: state.programScopeImports ?? {},
     sarifImports: state.sarifImports ?? {},
+    scannerResultImports: state.scannerResultImports ?? {},
     registeredConnectors: state.registeredConnectors ?? {},
     runConnectorBindings: state.runConnectorBindings ?? {},
     registeredToolboxBundles: state.registeredToolboxBundles ?? {},

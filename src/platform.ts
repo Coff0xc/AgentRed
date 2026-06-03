@@ -43,6 +43,7 @@ import { EvidenceReplayService } from './replay/evidence-replay-service.js';
 import { RunSupervisorService } from './runtime/run-supervisor-service.js';
 import { RuntimeOperationsWorkbenchService } from './runtime/runtime-operations-workbench-service.js';
 import { SarifImportService } from './sast/sarif-import-service.js';
+import { ScannerResultImportService } from './scanners/scanner-result-import-service.js';
 import { WorkerSelectionPolicyService } from './scheduling/worker-selection-policy-service.js';
 import { DomainSkillReadinessService } from './skills/domain-skill-readiness-service.js';
 import { DomainSkillService } from './skills/domain-skill-service.js';
@@ -110,6 +111,7 @@ export interface Platform {
   runExports: RunExportService;
   replay: EvidenceReplayService;
   sarif: SarifImportService;
+  scannerResults: ScannerResultImportService;
   workerRuntimes: WorkerRuntimeService;
   workerSelection: WorkerSelectionPolicyService;
   strategy: StrategyService;
@@ -142,6 +144,7 @@ export function createPlatform(options: { databasePath?: string } = {}): Platfor
   const credentials = new CredentialReferenceService(store, events);
   const findings = new FindingService(store, events);
   const sarif = new SarifImportService(store, evidence, findings, events);
+  const scannerResults = new ScannerResultImportService(store, evidence, findings, events);
   const androidManifests = new AndroidManifestImportService(store, evidence, findings, events);
   const cloudIam = new CloudIamImportService(store, evidence, findings, events);
   const identityGraphs = new IdentityGraphImportService(store, evidence, findings, events);
@@ -286,6 +289,7 @@ export function createPlatform(options: { databasePath?: string } = {}): Platfor
     runExports: new RunExportService(store, graph, findings, evidence, evidenceQuality, events),
     replay,
     sarif,
+    scannerResults,
     workerRuntimes,
     workerSelection,
     strategy,

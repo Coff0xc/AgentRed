@@ -21,6 +21,7 @@ import type {
   IdentityGraphProvider,
   RedactionState,
   RiskLevel,
+  ScannerResultEngine,
   ScopePolicy,
   Severity,
   ValidationState,
@@ -204,6 +205,8 @@ async function route(
         'POST /runs/{id}/identity-graph-imports',
         'GET /runs/{id}/sarif-imports',
         'POST /runs/{id}/sarif-imports',
+        'GET /runs/{id}/scanner-result-imports',
+        'POST /runs/{id}/scanner-result-imports',
         'GET /runs/{id}/capture-imports',
         'GET /runs/{id}/browser-snapshots',
         'POST /runs/{id}/captures/http-exchange',
@@ -1046,6 +1049,12 @@ async function route(
     return;
   }
 
+  if (method === 'GET' && pathParts[0] === 'runs' && pathParts[2] === 'scanner-result-imports') {
+    assertRunExists(platform, pathParts[1]);
+    sendJson(response, 200, platform.scannerResults.list(pathParts[1]));
+    return;
+  }
+
   if (method === 'GET' && pathParts[0] === 'runs' && pathParts[2] === 'cloud-iam-imports') {
     assertRunExists(platform, pathParts[1]);
     sendJson(response, 200, platform.cloudIam.list(pathParts[1]));
@@ -1077,6 +1086,17 @@ async function route(
       sendJson(response, 201, platform.sarif.import(input));
     } catch (error) {
       throw new HttpError(400, error instanceof Error ? error.message : 'SARIF import failed');
+    }
+    return;
+  }
+
+  if (method === 'POST' && pathParts[0] === 'runs' && pathParts[2] === 'scanner-result-imports') {
+    assertRunExists(platform, pathParts[1]);
+    const input = validateScannerResultImport(pathParts[1], await readJson(request));
+    try {
+      sendJson(response, 201, platform.scannerResults.import(input));
+    } catch (error) {
+      throw new HttpError(400, error instanceof Error ? error.message : 'Scanner result import failed');
     }
     return;
   }
@@ -1614,6 +1634,7 @@ function getRunReview(platform: Platform, runId: string) {
   const cloudIamImports = platform.cloudIam.list(runId);
   const identityGraphImports = platform.identityGraphs.list(runId);
   const sarifImports = platform.sarif.list(runId);
+  const scannerResultImports = platform.scannerResults.list(runId);
   const captureImports = listCaptureImports(platform, runId);
   const browserSnapshots = listBrowserSnapshots(platform, runId);
   const toolPackRuns = platform.toolPacks.listRuns(runId);
@@ -1639,6 +1660,7 @@ function getRunReview(platform: Platform, runId: string) {
     cloudIamImports,
     identityGraphImports,
     sarifImports,
+    scannerResultImports,
     captureImports,
     browserSnapshots,
     toolPackRuns,
@@ -2307,6 +2329,30 @@ function validateSarifImport(runId: string, input: unknown): {
   };
 }
 
+function validateScannerResultImport(runId: string, input: unknown): {
+  runId: string;
+  source?: string;
+  engine: ScannerResultEngine;
+  content: unknown;
+  createFindings: boolean;
+} {
+  const object = asRecord(input, 'request body');
+  if (object.content === undefined) {
+    throw new HttpError(400, 'content is required');
+  }
+  const raw = typeof object.content === 'string' ? object.content : JSON.stringify(object.content);
+  if (Buffer.byteLength(raw, 'utf8') > 1_000_000) {
+    throw new HttpError(413, 'Scanner result content is too large');
+  }
+  return {
+    runId,
+    source: optionalString(object.source, 'source'),
+    engine: validateScannerResultEngine(object.engine),
+    content: object.content,
+    createFindings: object.createFindings === undefined ? true : booleanValue(object.createFindings, 'createFindings'),
+  };
+}
+
 function validateAndroidManifestImport(runId: string, input: unknown): {
   runId: string;
   source?: string;
@@ -2582,6 +2628,13 @@ function validateIdentityGraphProvider(input: unknown): IdentityGraphProvider {
     throw new HttpError(400, 'provider must be bloodhound or generic');
   }
   return input;
+}
+
+function validateScannerResultEngine(input: unknown): ScannerResultEngine {
+  if (input === 'nuclei' || input === 'semgrep' || input === 'generic') {
+    return input;
+  }
+  throw new HttpError(400, 'engine must be nuclei, semgrep, or generic');
 }
 
 function validateLocalRunnerWorkbenchPrepare(input: unknown): {
