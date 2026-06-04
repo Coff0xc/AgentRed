@@ -1,10 +1,12 @@
 # AgentRed
 
-<div align="center">
+**AgentRed 是一个本地优先、证据驱动、带安全门禁的 AI 红队渗透测试智能体平台。**
 
-**Local-first AI red team workbench for scoped, evidence-driven security assessments.**
+它的目标不是让大模型自由乱跑工具，而是把企业授权渗透测试拆成一条可审计的工程流水线：
 
-**面向授权范围、证据留存和可交付报告的本地优先 AI 红队工作台。**
+```text
+授权范围 -> AI 推理 -> 工具门禁 -> 证据留存 -> 人工复核 -> 漏洞生命周期 -> 报告交付
+```
 
 [![CI](https://github.com/Coff0xc/AgentRed/actions/workflows/ci.yml/badge.svg)](https://github.com/Coff0xc/AgentRed/actions/workflows/ci.yml)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D24.0.0-339933)](package.json)
@@ -12,452 +14,126 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Security](https://img.shields.io/badge/security-authorized%20testing%20only-red)](SECURITY.md)
 
-[English](#english) | [中文](#中文) | [API](docs/API.md) | [Architecture](docs/ARCHITECTURE.md) | [Security Model](docs/SECURITY_MODEL.md)
-
-</div>
-
-> [!IMPORTANT]
-> AgentRed is built for authorized security work only. It fails closed when scope, approval, rate, or evidence requirements are not satisfied.
->
-> AgentRed 仅用于已获得明确授权的安全测试。当范围、审批、速率或证据要求不满足时，平台默认阻断。
-
-<table>
-  <tr>
-    <td width="50%">
-      <img src="docs/assets/agentred-operator-console.png" alt="AgentRed Operator Console showing run progress and the evidence-first workflow">
-    </td>
-    <td width="50%">
-      <img src="docs/assets/agentred-review-workspace.png" alt="AgentRed Review Workspace showing the evidence inbox and local evidence viewer">
-    </td>
-  </tr>
-  <tr>
-    <td><strong>Operator Console / 操作台</strong><br>Run progress, next action, evidence count, and report gates in one local view.<br>集中展示运行进度、下一步动作、证据数量和报告门禁。</td>
-    <td><strong>Evidence Review / 证据复核</strong><br>Redacted local evidence, review decisions, and finding handoff controls.<br>本地脱敏证据、复核决策和 Finding 交付控制。</td>
-  </tr>
-</table>
-
-## English
-
-AgentRed is a TypeScript platform kernel for running AI-assisted security assessments without giving agents direct authority over tools, findings, or evidence. It combines a dispatcher-owned state graph, replaceable Agent Workers, a policy-gated Tool Gateway, local evidence storage, human review, and report/export generation into one auditable workflow.
-
-Most AI security prototypes optimize for broad orchestration: more tools, more agents, more autonomous action. AgentRed optimizes for control. Workers suggest. The Dispatcher decides. The Tool Gateway gates. Evidence is hashed, redacted, and reviewed before it becomes a finding or report artifact.
-
-### Why AgentRed
-
-| Problem | AgentRed's answer |
-| --- | --- |
-| AI agents can overreach scope | Every run carries a `ScopePolicy`; out-of-scope actions fail before execution or capture. |
-| Tool output is hard to trust | Evidence is stored locally, hashed with SHA-256, redacted, and reviewable. |
-| Findings often lack proof | Findings must reference same-run evidence; confirmed findings require useful-reviewed evidence. |
-| Multi-agent systems blur ownership | Workers never write protocol state. The Dispatcher owns graph transitions. |
-| External scanners can be risky | Scanner templates are registered, planned, gated, and fail closed unless runtime policy allows them. |
-| Reports need commercial handoff discipline | Reports and exports preserve evidence references while excluding raw local-only content by default. |
-
-### Product Shape
-
-| Dimension | Current implementation |
-| --- | --- |
-| Runtime | Node.js 24+, TypeScript, ESM |
-| Interface | Local REST API plus Operator Console at `/app` |
-| Storage | SQLite snapshot at `.local/platform.db` by default; in-memory mode for tests |
-| Worker model | Dispatcher-owned loop with mock and CLI Agent Worker adapters |
-| Safety model | `ScopePolicy`, R0-R4 risk gates, approvals, rate limits, redaction |
-| Evidence model | Local blobs, SHA-256 hashes, review state, redaction state |
-| Outputs | Evidence-backed findings, Markdown reports, hashable run exports |
-
-### Quick Start
-
-Prerequisites:
-
-- Node.js `>=24.0.0`
-- npm
-
-Install and verify:
-
-```bash
-npm ci
-npm run typecheck
-npm test
-npm run build
-```
-
-Start the local API and Operator Console:
-
-```bash
-PLATFORM_API_TOKEN=local-dev-token npm run dev
-```
-
-PowerShell:
-
-```powershell
-$env:PLATFORM_API_TOKEN = "local-dev-token"
-npm run dev
-```
-
-Open:
-
-```text
-http://127.0.0.1:4317/app
-```
-
-`PLATFORM_API_TOKEN` is required and must be generated outside the process; the server refuses to start without it and never prints the token value. `/` and `/health` are unauthenticated; API data and mutations require `Authorization: Bearer <token>` or `X-Platform-Token: <token>`.
-
-### First Scoped Run
-
-Create a run with a deterministic mock worker:
-
-```bash
-curl -X POST http://127.0.0.1:4317/runs \
-  -H "Authorization: Bearer $PLATFORM_API_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "target": "https://app.example.com",
-    "goal": "Produce an evidence-backed assessment report",
-    "scopePolicy": {
-      "allowedAssets": ["app.example.com", "*.example.com"],
-      "deniedAssets": ["admin.example.com"],
-      "allowedMethods": ["GET", "POST"],
-      "destructiveAllowed": false,
-      "credentialRules": { "allowVaultReferencesOnly": true },
-      "rateLimits": { "requestsPerMinute": 120 }
-    },
-    "workerPool": [
-      { "name": "mock-worker", "type": "mock", "maxRunning": 1, "priority": 0, "timeoutMs": 60000 }
-    ]
-  }'
-```
-
-Then drive the run through the console or API:
-
-1. Inspect mission state with `/runs/{id}/mission-control`, `/workbench`, `/search-plan`, and `/surface`.
-2. Preview tool gates with `POST /runs/{id}/tools/plan`.
-3. Dispatch one Agent Worker step with `POST /runs/{id}/dispatch`.
-4. Review evidence with `POST /evidence/{id}/review`.
-5. Validate findings with `POST /findings/{id}/validation`.
-6. Generate a report with `POST /reports`.
-7. Generate a handoff bundle with `POST /runs/{id}/exports`.
-
-Autonomous progress is intentionally incremental. `POST /runs/{id}/autopilot/tick` and `POST /runs/{id}/search-plan/advance` automate one safe move at a time, while still routing through Dispatcher, Tool Gateway, approval, evidence, and finding gates.
-
-### How It Works
-
-```mermaid
-flowchart LR
-  Operator["Operator Console / CLI"]
-  API["Local REST API"]
-  Mission["Mission Control / Read Models"]
-  Graph["Run Graph"]
-  Dispatcher["Dispatcher"]
-  Worker["Agent Workers"]
-  Gateway["Tool Gateway"]
-  Tools["HTTP / Scanner / Browser / Proxy / OAST / Shell"]
-  Evidence["Evidence Engine"]
-  Review["Review / Findings / Reports"]
-  Store["SQLite Local Store"]
-
-  Operator --> API
-  API --> Mission
-  API --> Graph
-  API --> Dispatcher
-  Dispatcher --> Worker
-  Worker --> Dispatcher
-  Dispatcher --> Graph
-  Dispatcher --> Gateway
-  API --> Gateway
-  Gateway --> Tools
-  Gateway --> Evidence
-  Evidence --> Review
-  Graph --> Store
-  Evidence --> Store
-  Mission --> Store
-  Review --> Store
-```
-
-Core invariant: Agent Workers never claim intents, approve actions, write findings, store evidence, or communicate with each other. They return structured task results. The Dispatcher validates those results and decides whether graph state changes.
-
-State shape:
-
-```text
-Run -> Fact -> Intent -> Evidence -> Finding -> Report / Export
-```
-
-Worker loop:
-
-```text
-bootstrap -> reason -> explore -> reason -> ... -> completed
-```
-
-### Core Concepts
-
-| Concept | Meaning |
-| --- | --- |
-| `Run` | Authorization container for one assessment objective. |
-| `ScopePolicy` | Allowed assets, denied assets, methods, risk posture, credential rules, and rate limits. |
-| `Fact` | Objective state already accepted into the run graph. |
-| `Intent` | Proposed direction of exploration. Intents can be open, claimed, concluded, or released. |
-| `Evidence` | Hashable local artifact metadata plus local blob content and redaction state. |
-| `Finding` | Candidate or confirmed vulnerability record tied to evidence. |
-| `Dispatcher` | Component that advances Worker tasks and writes graph transitions. |
-| `Agent Worker` | Replaceable model or CLI worker that returns structured JSON for one task. |
-| `Tool Gateway` | Policy choke point for tools, scanner templates, shell commands, OAST, credentials, access review, and findings. |
-| `Approval` | Human decision record required for R3 validation work. |
-| `Report` / `RunExport` | Delivery artifacts that preserve evidence references and redaction boundaries. |
-
-### Implemented Surface
-
-| Area | Available today |
-| --- | --- |
-| Local platform | REST API, local Operator Console, SQLite snapshot store, in-memory test store. |
-| Authorization | Allowlist, denylist, HTTP method policy, destructive-action flag, credential rules, rate limits. |
-| Worker orchestration | Dispatcher, intent leases, heartbeat support, timeout release, mock worker, CLI worker adapter. |
-| Worker governance | `agent-worker.v1` envelope, envelope preview, output schema validation, runtime health. |
-| Planning views | Strategy recommendations, Search Plan, Attack Surface Map, Assessment Flow, Agent Workbench, Mission Control. |
-| Tool governance | Tool catalog, no-side-effect plan route, invoke route, approval binding, audit records. |
-| Evidence | Hashing, redaction states, local blob content, content API, evidence review, replay plans, safe replay. |
-| Reporting | Evidence-backed findings, validation state, Markdown reports, run export bundles. |
-| Capture | HTTP exchange capture, HAR import, browser snapshots, browser sessions, explicit HTTP proxy capture. |
-| Domain imports | SARIF, Android Manifest, Cloud IAM policy, Identity Graph. |
-| Observability | Trace spans, cost ledger, evaluations, scorecards, capability radar, evidence quality, delivery readiness, enterprise pentest scorer, vulnerability lifecycle, run supervisor. |
-| Ecosystem | Tool Packs, Toolbox Profiles, Toolbox Bundles, Connector Registry, integration backlog. |
-| CI | GitHub Actions for install, typecheck, test, and build on Node 24. |
-
-### Tool Gateway
-
-High-level tools currently exposed through policy gates:
-
-| Tool | Purpose |
-| --- | --- |
-| `http.request` | Scope-checked HTTP request capture. |
-| `browser.navigate` | Browser-session navigation evidence. |
-| `scanner.run_template` | Governed scanner template execution or planning. |
-| `shell.run_sandboxed` | Restricted shell command execution through an allowlist. |
-| `credential.use_placeholder` | Audited placeholder credential use without storing raw secrets. |
-| `access.compare_evidence` | Same-run evidence comparison for access review. |
-| `oast.start_session` | Local OAST session planning and approval flow. |
-| `oast.record_callback` | Redacted OAST callback evidence. |
-| `finding.propose` | Evidence-backed candidate finding proposal. |
-
-Built-in scanner templates include web security headers, endpoint discovery, auth endpoint discovery, API version discovery, host header probing, query parameter probing, technology fingerprinting, cookie flags, CORS/CSP analysis, JavaScript asset inventory, OpenAPI/OAuth discovery, GraphQL introspection planning, DNS records, and TLS certificate capture.
-
-External templates such as nuclei, ffuf, httpx, sqlmap, nmap, tlsx, semgrep, apktool, and Frida are registered for planning and readiness visibility. They fail closed unless the required runtime profile and explicit policy gates are enabled.
-
-### API Overview
-
-Primary route groups:
-
-| Group | Example routes |
-| --- | --- |
-| Health and console | `GET /`, `GET /health`, `GET /app` |
-| Runs and graph | `GET /runs`, `POST /runs`, `GET /runs/{id}/graph`, `GET /runs/{id}/progress` |
-| Operator workbenches | `GET /runs/{id}/mission-control`, `/workbench`, `/flow`, `/surface`, `/search-plan` |
-| Dispatcher | `POST /runs/{id}/dispatch`, `POST /runs/{id}/autopilot/tick`, `POST /intents/{id}/heartbeat` |
-| Workers | `GET /runs/{id}/workers`, `/worker-envelope/preview`, `/worker-selection`, `/worker-evaluation-plan` |
-| Tools | `GET /tool-catalog`, `POST /runs/{id}/tools/plan`, `POST /runs/{id}/tools` |
-| Evidence and review | `POST /runs/{id}/evidence`, `GET /evidence/{id}/content`, `POST /evidence/{id}/review` |
-| Capture | `POST /runs/{id}/captures/http-exchange`, `/captures/har`, `/captures/browser-snapshot` |
-| Findings and reports | `POST /runs/{id}/findings`, `POST /findings/{id}/validation`, `POST /reports`, `POST /runs/{id}/exports` |
-
-Full request and response examples live in [docs/API.md](docs/API.md).
-
-### Safety Model
-
-Risk levels:
-
-| Level | Meaning |
-| --- | --- |
-| `R0` | Passive read or metadata-only action. |
-| `R1` | Ordinary HTTP/browser action, allowed only when in scope. |
-| `R2` | Scanning or bounded fuzzing, allowed only when policy and scope match. |
-| `R3` | Exploit validation, OAST, state-changing checks, or cross-role auth tests. Requires explicit approval. |
-| `R4` | Destructive, credential theft, persistence, data exfiltration, brute force, or out-of-scope behavior. Blocked by default; break-glass use requires matching scope token plus approval. |
-
-Fail-closed behavior:
-
-- Denylist entries override allowlist entries.
-- Out-of-scope targets are blocked before execution or capture storage.
-- Unsupported tools and unsupported HTTP methods are blocked.
-- R3 actions require approval bound to the same run, tool, target, and risk level.
-- R4 actions remain blocked unless the run has a matching break-glass scope token, the request submits that token, scope/method gates pass, and a matching human approval is approved.
-- Break-glass R4 tokens stay internal: API run/graph/review responses, Worker envelopes, and run exports redact them.
-- Tool invocations and approval records store redacted targets and arguments.
-- Secret-looking Worker environment values are rejected from `workerPool.env`.
-- Findings without same-run evidence are rejected.
-- Confirmed findings require useful-reviewed evidence.
-- Report generation defaults to `confirmed_only`.
-- Raw local-only evidence is excluded from reports and exports by default.
-
-See [docs/SECURITY_MODEL.md](docs/SECURITY_MODEL.md) for the detailed model.
-
-### Configuration
-
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `PORT` | `4317` | Local API port. |
-| `PLATFORM_DB_PATH` | `.local/platform.db` | SQLite state path. |
-| `PLATFORM_API_TOKEN` | required | Local API bearer token. Generate it outside the process and keep it out of logs. |
-| `OPENAI_API_KEY` | unset | Provider key for future or CLI Worker integrations; keep it in the API process environment. |
-| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Optional OpenAI-compatible base URL. |
-| `OPENAI_MODEL` | `gpt-4.1-mini` | Optional default model value for Worker integrations. |
-| `ANTHROPIC_API_KEY` | unset | Enables the built-in Claude Worker adapter when `type: "claude"` is used without a custom command. |
-| `CLAUDE_MODEL` | `claude-sonnet-4-5` | Optional model override for the built-in Claude Worker adapter. |
-| `PLATFORM_ALLOW_EXTERNAL_TOOLBOX` | `0` | Enables external scanner execution only when set to `1`. |
-| `PLATFORM_ALLOWED_SCANNER_TEMPLATES` | empty | Comma-separated external template allowlist; `*` allows all registered external templates. |
-| `PLATFORM_ENABLE_CONTAINER_TOOLBOX` | `0` | Enables container toolbox profile probing. |
-| `PLATFORM_CONTAINER_RUNTIME` | `docker` | Container runtime command. |
-| `PLATFORM_ENABLE_LOCAL_SAST` | `0` | Enables local SAST profile probing. |
-| `PLATFORM_ENABLE_ANDROID_TOOLBOX` | `0` | Enables Android toolbox profile probing. |
-
-Do not commit API keys, passwords, cookies, JWTs, certificates, HAR files, local databases, browser profiles, or raw evidence exports.
-
-### Repository Layout
-
-```text
-.
-|-- src/
-|   |-- api/                 Local REST API and Operator Console routes
-|   |-- domain/              Shared contracts, ids, and risk types
-|   |-- graph/               Run graph state service
-|   |-- dispatcher/          Worker task scheduling and intent leases
-|   |-- workers/             Mock worker, CLI adapter, protocol envelope
-|   |-- tools/               Tool Gateway, templates, packs, toolbox readiness
-|   |-- captures/            Browser and proxy session services
-|   |-- evidence/            Evidence engine and review service
-|   |-- findings/            Evidence-backed finding service
-|   |-- reports/             Report and run export generation
-|   |-- scope/               Scope evaluation and program import
-|   |-- strategy/            Strategy and Search Plan read models
-|   |-- surface/             Attack Surface Map read model
-|   |-- observability/       Scorecards, radar, delivery, eval, leaderboard
-|   |-- agents/              Agent Framework, Harness, and Workbench read models
-|   |-- desktop/             Local runner and desktop readiness read models
-|   |-- skills/              Domain Skill registry and readiness
-|   |-- poc/                 Curated PoC evidence templates
-|   |-- connectors/          Connector metadata and governed mappings
-|   |-- access/              Same-run access review and diff evidence
-|   |-- credentials/         Credential reference metadata
-|   |-- oast/                Local OAST callback inbox
-|   |-- sast/                SARIF import
-|   |-- mobile/              Android Manifest import
-|   |-- cloud/               Cloud IAM policy import
-|   |-- identity/            Identity Graph import
-|   |-- storage/             In-memory and SQLite stores
-|   `-- index.ts             Local server entrypoint
-|-- tests/                   Node test suite
-|-- docs/                    Architecture, API, security, publishing notes, screenshots
-|-- .github/workflows/       CI
-|-- package.json
-|-- tsconfig.json
-`-- README.md
-```
-
-### Development
-
-Useful commands:
-
-```bash
-npm ci
-npm run dev
-npm run typecheck
-npm test
-npm run build
-```
-
-Package scripts:
-
-| Script | What it does |
-| --- | --- |
-| `npm run dev` | Runs `src/index.ts` with `tsx`. |
-| `npm run typecheck` | Runs TypeScript with `--noEmit`. |
-| `npm test` | Runs Node tests through `tsx --test tests/*.test.ts`. |
-| `npm run build` | Compiles TypeScript with `tsc -p tsconfig.json`. |
-
-Development rules:
-
-- Preserve the local-first security model.
-- Do not add direct Worker write paths.
-- Do not bypass Tool Gateway, scope, approval, audit, evidence, or redaction controls.
-- Add focused tests for security-sensitive behavior.
-- Update docs when API routes or operator workflows change.
-
-### Current Limits
-
-AgentRed is currently a platform kernel, not a finished hosted product. The following are still roadmap items:
-
-- Tauri + React desktop product
-- Rust local daemon for desktop runner orchestration
-- TLS MITM proxy with local CA management
-- Real browser automation with JavaScript execution
-- Default-on Docker/Podman external toolbox execution
-- Full public OAST relay polling and tenant-retention controls
-- Cloud tenant, RBAC, SSO, billing, and redacted sync
-- Production-grade relational storage and migrations
-
-The maturity path is tracked in [Maturity Roadmap](docs/MATURITY_ROADMAP.md), with a deeper [AI Red Team Agent Reference Analysis](docs/AI_RED_TEAM_AGENT_REFERENCE_ANALYSIS.md) for high-star autonomous pentest agents, LLM red-team frameworks, MCP tool ecosystems, and mature AgentOps patterns. The enterprise high-risk workflow target is captured in [Enterprise Pentest Agent Workflows](docs/ENTERPRISE_PENTEST_AGENT_WORKFLOWS.md), including the Z3r0-inspired multi-agent workbench, real browser/proxy runner, typed scanner adapters, scorers, evidence center, and vulnerability lifecycle. These references are mapped into first-party AgentRed APIs, evidence contracts, parsers, and roadmap gates.
-
-### Documentation
-
-- [Architecture](docs/ARCHITECTURE.md)
-- [API Reference](docs/API.md)
-- [Security Model](docs/SECURITY_MODEL.md)
-- [Maturity Roadmap](docs/MATURITY_ROADMAP.md)
-- [AI Red Team Agent Reference Analysis](docs/AI_RED_TEAM_AGENT_REFERENCE_ANALYSIS.md)
-- [Enterprise Pentest Agent Workflows](docs/ENTERPRISE_PENTEST_AGENT_WORKFLOWS.md)
-- [Publishing Checklist](docs/PUBLISHING.md)
-- [Contributing](CONTRIBUTING.md)
-- [Security Policy](SECURITY.md)
-
-### License
-
-MIT. See [LICENSE](LICENSE).
+文档入口：
+[API](docs/API.md) |
+[Architecture](docs/ARCHITECTURE.md) |
+[Security Model](docs/SECURITY_MODEL.md) |
+[Maturity Roadmap](docs/MATURITY_ROADMAP.md) |
+[Enterprise Pentest Workflows](docs/ENTERPRISE_PENTEST_AGENT_WORKFLOWS.md)
+
+> AgentRed 只用于明确授权的安全测试、防御验证和本地证据工作流。
+> 未授权目标、凭据窃取、持久化、数据外传、破坏性动作和绕过检测不是这个项目的使用目标。
 
 ---
 
-## 中文
+## 1. 一句话讲清楚
 
-AgentRed 是一个 TypeScript 平台内核，用来运行 AI 辅助的授权安全评估，同时避免让 Agent 直接掌控工具、证据、发现项或报告。它把 Dispatcher 管理的状态图、可替换的 Agent Worker、策略门控的 Tool Gateway、本地证据存储、人工复核和报告导出串成一条可审计的工作流。
+AgentRed 是一个“AI 红队项目经理 + 安全工程执行平台”。
 
-很多 AI 安全原型追求“更多工具、更多 Agent、更强自治”。AgentRed 追求的是可控：Worker 负责提出建议，Dispatcher 负责状态推进，Tool Gateway 负责执行门禁，证据必须先本地留存、哈希、脱敏和复核，之后才能进入发现项或报告。
+大模型负责分析和建议，平台负责控制边界、调用工具、保存证据、审批高风险动作、生成交付材料。
 
-### 为什么需要 AgentRed
+核心原则很简单：
 
-| 问题 | AgentRed 的处理方式 |
+| 谁 | 负责什么 | 不能做什么 |
+| --- | --- | --- |
+| AI Worker | 分析目标、提出下一步、请求工具、整理结论 | 不能直接执行工具，不能直接写漏洞，不能绕过审批 |
+| Dispatcher | 领取任务、推进状态、管理多轮探索、释放卡住的任务 | 不能跳过 Tool Gateway |
+| Tool Gateway | 检查 scope、风险等级、审批、速率和工具策略 | 不满足门禁就不执行 |
+| Evidence Engine | 保存证据、哈希、脱敏、记录来源 | 不让没有证据的 finding 进入交付 |
+| Reviewer | 复核证据、确认或拒绝漏洞 | 高风险验证必须留审批记录 |
+| Report / Export | 生成报告和交付包 | 默认不导出 raw local-only 敏感证据 |
+
+---
+
+## 2. 为什么要做这个
+
+成熟企业要的不是“AI 看起来很会黑”，而是这几件事：
+
+1. 能在授权范围内持续推进测试。
+2. 能识别高危漏洞信号，而不是只扫 headers。
+3. 每一步工具调用都能解释为什么做、做了什么、结果是什么。
+4. 每个漏洞都能追到证据。
+5. 高风险动作有人审批。
+6. 卡住、循环、失败能被监督器发现。
+7. 报告能交付，证据能复核，生命周期能跟踪。
+
+AgentRed 现在围绕这些目标建设。
+
+它不是单纯的聊天机器人，也不是把 nmap、nuclei、sqlmap 暴露给大模型的粗糙 MCP 代理。它更像一个本地安全评估内核：AI 可以很强，但必须被工程化约束。
+
+---
+
+## 3. 当前已经具备的能力
+
+| 模块 | 已实现能力 |
 | --- | --- |
-| AI Agent 容易越过授权范围 | 每个 Run 都携带 `ScopePolicy`；越权动作在执行或采集前直接阻断。 |
-| 工具输出难以复核 | 证据本地保存，使用 SHA-256 哈希，带脱敏状态和复核状态。 |
-| 漏洞发现经常缺少证据 | Finding 必须引用同一个 Run 内的 Evidence；确认项必须绑定已复核证据。 |
-| 多 Agent 系统容易状态归属混乱 | Worker 不写协议状态；Dispatcher 统一负责状态迁移。 |
-| 外部扫描器风险不可控 | 扫描模板先注册、可预览、受策略门控；运行时策略不满足就默认阻断。 |
-| 商业交付需要证据边界 | 报告和导出包保留证据引用，默认排除 raw local-only 内容。 |
+| 本地平台 | REST API、本地 Operator Console、SQLite 本地存储、测试内存存储 |
+| AI Worker | Mock Worker、CLI Worker、Claude Worker、`agent-worker.v1` 协议、session summary 上下文 |
+| 调度 | Bootstrap、Reason、Explore 多轮循环、intent lease、heartbeat、超时释放、循环上限监督 |
+| 安全门禁 | `ScopePolicy`、allowlist、denylist、HTTP 方法限制、R0-R4 风险等级、审批、速率限制 |
+| 主动探测 | `web.param_probe`、认证端点发现、API 版本发现、Host header probe、基础 HTTP 探测 |
+| 外部扫描器 | typed scanner template、nuclei safe template 可用性、nuclei JSONL 自动导入 finding |
+| 证据中心 | 本地 evidence blob、SHA-256、脱敏状态、复核状态、evidence content API |
+| 访问控制测试 | credential reference、placeholder 使用、跨角色 evidence compare |
+| OAST | local OAST、interactsh-compatible callback URL 模式 |
+| 漏洞生命周期 | candidate、confirmed、rejected、duplicate、retest readiness、report/export delivery |
+| 报告 | Markdown report、run export、confirmed-only 默认交付门禁 |
+| 可观测性 | trace、cost ledger、capability radar、enterprise pentest scorer、run supervisor |
+| 评测 | 平台测试、scorer、固定场景回归、worker envelope preview |
 
-### 产品形态
+---
 
-| 维度 | 当前实现 |
-| --- | --- |
-| 运行时 | Node.js 24+、TypeScript、ESM |
-| 界面 | 本地 REST API，加 `/app` Operator Console |
-| 存储 | 默认 SQLite 快照 `.local/platform.db`；测试支持内存模式 |
-| Worker 模型 | Dispatcher 管理的任务循环，支持 mock 和 CLI Worker 适配器 |
-| 安全模型 | `ScopePolicy`、R0-R4 风险等级、审批、速率限制、脱敏 |
-| 证据模型 | 本地 blob、SHA-256 哈希、复核状态、脱敏状态 |
-| 输出 | 证据支撑的 Findings、Markdown 报告、可哈希的 Run Export |
+## 4. 当前还不是完整商业产品
 
-### 快速开始
+这点必须说清楚，避免误用。
 
-前置要求：
+AgentRed 当前是平台内核，不是已经完整商品化的 SaaS 或桌面工具。
 
-- Node.js `>=24.0.0`
-- npm
+还在路线图里的能力包括：
 
-安装并验证：
+- 真正完整的桌面端产品体验
+- 真实浏览器自动化和本地代理 Runner 的生产级闭环
+- TLS MITM proxy 和本地 CA 生命周期
+- Docker/Podman 外部 toolbox 默认可用配置
+- 更多 typed adapter：nmap、httpx、ffuf、sqlmap、semgrep、Burp、ZAP
+- 多租户、RBAC、SSO、审计工作台
+- 生产级数据库迁移和团队协作
+- 更完整的企业资产导入、任务编排和复测闭环
+
+路线图见：
+
+- [Maturity Roadmap](docs/MATURITY_ROADMAP.md)
+- [AI Red Team Agent Reference Analysis](docs/AI_RED_TEAM_AGENT_REFERENCE_ANALYSIS.md)
+- [Enterprise Pentest Agent Workflows](docs/ENTERPRISE_PENTEST_AGENT_WORKFLOWS.md)
+
+---
+
+## 5. 快速开始
+
+### 5.1 环境要求
+
+```text
+Node.js >= 24.0.0
+npm
+```
+
+### 5.2 安装
 
 ```bash
 npm ci
+```
+
+### 5.3 验证项目能跑
+
+```bash
 npm run typecheck
 npm test
 npm run build
 ```
 
-启动本地 API 和 Operator Console：
+### 5.4 启动本地服务
+
+Linux / macOS：
 
 ```bash
 PLATFORM_API_TOKEN=local-dev-token npm run dev
@@ -470,17 +146,24 @@ $env:PLATFORM_API_TOKEN = "local-dev-token"
 npm run dev
 ```
 
-打开：
+打开本地控制台：
 
 ```text
 http://127.0.0.1:4317/app
 ```
 
-`PLATFORM_API_TOKEN` 是必填项，必须在进程外生成；服务缺失该变量会拒绝启动，并且不会打印 token 明文。`/` 和 `/health` 不需要认证；API 数据和写操作需要 `Authorization: Bearer <token>` 或 `X-Platform-Token: <token>`。
+注意：
 
-### 第一次授权运行
+- `PLATFORM_API_TOKEN` 必填。
+- 服务不会自己生成 token。
+- `/` 和 `/health` 不需要认证。
+- 其他 API 需要 `Authorization: Bearer <token>` 或 `X-Platform-Token: <token>`。
 
-使用确定性的 mock worker 创建一个带范围控制的 Run：
+---
+
+## 6. 创建第一条授权测试任务
+
+下面这个例子使用 mock worker，适合验证平台流程。
 
 ```bash
 curl -X POST http://127.0.0.1:4317/runs \
@@ -498,288 +181,358 @@ curl -X POST http://127.0.0.1:4317/runs \
       "rateLimits": { "requestsPerMinute": 120 }
     },
     "workerPool": [
-      { "name": "mock-worker", "type": "mock", "maxRunning": 1, "priority": 0, "timeoutMs": 60000 }
+      {
+        "name": "mock-worker",
+        "type": "mock",
+        "maxRunning": 1,
+        "priority": 0,
+        "timeoutMs": 60000
+      }
     ]
   }'
 ```
 
-之后可以通过界面或 API 推进：
+拿到 `run.id` 后，可以用这些 API 推进：
 
-1. 用 `/runs/{id}/mission-control`、`/workbench`、`/search-plan`、`/surface` 查看任务状态。
-2. 用 `POST /runs/{id}/tools/plan` 预览工具门禁。
-3. 用 `POST /runs/{id}/dispatch` 推进一个 Agent Worker 步骤。
-4. 用 `POST /evidence/{id}/review` 复核证据。
-5. 用 `POST /findings/{id}/validation` 验证发现项。
-6. 用 `POST /reports` 生成报告。
-7. 用 `POST /runs/{id}/exports` 生成交付包。
+| 你想做什么 | API |
+| --- | --- |
+| 查看图状态 | `GET /runs/{id}/graph` |
+| 查看任务总览 | `GET /runs/{id}/mission-control` |
+| 预览 Worker 输入 | `GET /runs/{id}/worker-envelope/preview` |
+| 推进一步 AI 调度 | `POST /runs/{id}/dispatch` |
+| 让 Autopilot 推进一步 | `POST /runs/{id}/autopilot/tick` |
+| 预览工具门禁 | `POST /runs/{id}/tools/plan` |
+| 调用工具 | `POST /runs/{id}/tools` |
+| 复核证据 | `POST /evidence/{id}/review` |
+| 验证漏洞 | `POST /findings/{id}/validation` |
+| 生成报告 | `POST /reports` |
+| 导出交付包 | `POST /runs/{id}/exports` |
 
-AgentRed 的自治推进是刻意分步的。`POST /runs/{id}/autopilot/tick` 和 `POST /runs/{id}/search-plan/advance` 每次只自动推进一个安全动作，并且仍然经过 Dispatcher、Tool Gateway、审批、证据和 Finding 门禁。
+完整 API 示例见 [docs/API.md](docs/API.md)。
 
-### 工作机制
+---
+
+## 7. 使用 Claude Worker
+
+AgentRed 已经有内置 Claude Worker 入口。
+
+安装 Anthropic SDK：
+
+```bash
+npm install @anthropic-ai/sdk
+```
+
+设置环境变量：
+
+```bash
+ANTHROPIC_API_KEY=your-key
+CLAUDE_MODEL=claude-sonnet-4-5
+```
+
+PowerShell：
+
+```powershell
+$env:ANTHROPIC_API_KEY = "your-key"
+$env:CLAUDE_MODEL = "claude-sonnet-4-5"
+```
+
+Run 的 `workerPool` 配置：
+
+```json
+[
+  {
+    "name": "claude-op",
+    "type": "claude",
+    "maxRunning": 1,
+    "priority": 1,
+    "timeoutMs": 90000
+  }
+]
+```
+
+规则：
+
+- API key 放在本地服务进程环境变量。
+- 不要把 key 写进 `workerPool.env`。
+- Worker 只返回 JSON 决策。
+- 工具调用仍然必须经过 Dispatcher 和 Tool Gateway。
+
+---
+
+## 8. 使用外部扫描器
+
+外部扫描器默认不会直接执行。
+
+要让外部 toolbox 能运行，需要同时满足：
+
+1. 模板在平台注册。
+2. 目标在 `ScopePolicy` 授权范围内。
+3. 风险等级允许。
+4. 需要审批的动作已经审批。
+5. 环境变量允许外部 toolbox。
+6. 对应 profile 可用。
+7. 模板在 allowlist 中。
+
+常用环境变量：
+
+| 变量 | 说明 |
+| --- | --- |
+| `PLATFORM_ALLOW_EXTERNAL_TOOLBOX=1` | 允许外部 scanner 执行 |
+| `PLATFORM_ALLOWED_SCANNER_TEMPLATES=web.nuclei.safe_templates` | 允许指定模板 |
+| `PLATFORM_ALLOWED_SCANNER_TEMPLATES=*` | 允许全部已注册外部模板 |
+| `PLATFORM_ENABLE_CONTAINER_TOOLBOX=1` | 启用 container toolbox profile |
+| `PLATFORM_CONTAINER_RUNTIME=docker` | 使用 Docker |
+
+示例：
+
+```bash
+PLATFORM_API_TOKEN=local-dev-token \
+PLATFORM_ALLOW_EXTERNAL_TOOLBOX=1 \
+PLATFORM_ALLOWED_SCANNER_TEMPLATES=web.nuclei.safe_templates \
+PLATFORM_ENABLE_CONTAINER_TOOLBOX=1 \
+npm run dev
+```
+
+`web.nuclei.safe_templates` 当前是 available adapter。执行产生的 nuclei JSONL 输出会自动尝试导入为结构化 findings。解析失败不会阻断原始 command output evidence 的保存。
+
+---
+
+## 9. 平台工作流
+
+### 9.1 标准流程
 
 ```mermaid
 flowchart LR
-  Operator["Operator Console / CLI"]
-  API["Local REST API"]
-  Mission["Mission Control / Read Models"]
-  Graph["Run Graph"]
-  Dispatcher["Dispatcher"]
-  Worker["Agent Workers"]
-  Gateway["Tool Gateway"]
-  Tools["HTTP / Scanner / Browser / Proxy / OAST / Shell"]
-  Evidence["Evidence Engine"]
-  Review["Review / Findings / Reports"]
-  Store["SQLite Local Store"]
-
-  Operator --> API
-  API --> Mission
-  API --> Graph
-  API --> Dispatcher
-  Dispatcher --> Worker
-  Worker --> Dispatcher
-  Dispatcher --> Graph
-  Dispatcher --> Gateway
-  API --> Gateway
-  Gateway --> Tools
-  Gateway --> Evidence
-  Evidence --> Review
-  Graph --> Store
-  Evidence --> Store
-  Mission --> Store
-  Review --> Store
+  A["Create Run"] --> B["ScopePolicy"]
+  B --> C["Worker Bootstrap"]
+  C --> D["Worker Reason"]
+  D --> E["Intent"]
+  E --> F["Worker Explore"]
+  F --> G["Tool Gateway"]
+  G --> H["Evidence"]
+  H --> I["Review Evidence"]
+  I --> J["Finding"]
+  J --> K["Validate"]
+  K --> L["Report"]
+  L --> M["Export"]
 ```
 
-核心不变量：Agent Worker 不 claim intent、不审批动作、不写 finding、不保存 evidence，也不相互通信。Worker 只返回结构化任务结果，由 Dispatcher 校验并决定是否写入状态图。
-
-状态形态：
+### 9.2 Worker 循环
 
 ```text
-Run -> Fact -> Intent -> Evidence -> Finding -> Report / Export
+bootstrap -> reason -> explore -> reason -> explore -> ... -> complete
 ```
 
-Worker 循环：
+### 9.3 多轮 Explore
 
-```text
-bootstrap -> reason -> explore -> reason -> ... -> completed
+Worker 可以在 explore 结果里返回：
+
+```json
+{
+  "accepted": true,
+  "data": {
+    "description": "Need one more round after baseline evidence.",
+    "continueExplore": true,
+    "toolRequests": []
+  }
+}
 ```
 
-### 核心概念
+平台行为：
 
-| 概念 | 含义 |
-| --- | --- |
-| `Run` | 一个评估目标的授权容器。 |
-| `ScopePolicy` | 授权资产、拒绝资产、允许方法、风险策略、凭据规则和速率限制。 |
-| `Fact` | 已经被接受进 Run Graph 的客观状态。 |
-| `Intent` | 下一步探索方向，可处于 open、claimed、concluded 或 released 状态。 |
-| `Evidence` | 可哈希的本地证据元数据、本地内容和脱敏状态。 |
-| `Finding` | 候选或确认漏洞记录，必须绑定证据。 |
-| `Dispatcher` | 推进 Worker 任务并写入图状态迁移的组件。 |
-| `Agent Worker` | 可替换的模型或 CLI Worker，每次任务返回结构化 JSON。 |
-| `Tool Gateway` | HTTP、扫描模板、shell、OAST、凭据、访问复核和 Finding 的策略门控点。 |
-| `Approval` | R3 验证动作所需的人工审批记录。 |
-| `Report` / `RunExport` | 保留证据引用和脱敏边界的交付产物。 |
+- 先执行本轮 `toolRequests`。
+- 保存产生的 evidence。
+- 下一轮重新读取最新 graph。
+- 把 `producedEvidenceIds` 传回 Worker。
+- 最多 4 轮。
+- 如果 4 轮后 Worker 仍要求继续，Dispatcher 会释放 intent 并记录 blocked reason。
 
-### 已实现能力
+这避免了 AI 在没有新证据的情况下空转，也避免把未完成探索伪装成已完成结论。
 
-| 领域 | 当前能力 |
-| --- | --- |
-| 本地平台 | REST API、本地 Operator Console、SQLite 快照存储、测试用内存存储。 |
-| 授权控制 | allowlist、denylist、HTTP 方法策略、破坏性动作开关、凭据规则、速率限制。 |
-| Worker 编排 | Dispatcher、intent lease、heartbeat、超时释放、mock worker、CLI worker adapter。 |
-| Worker 治理 | `agent-worker.v1` envelope、envelope preview、输出 schema 校验、运行时健康状态。 |
-| 规划视图 | Strategy recommendations、Search Plan、Attack Surface Map、Assessment Flow、Agent Workbench、Mission Control。 |
-| 工具治理 | Tool catalog、无副作用 plan 路由、invoke 路由、审批绑定、审计记录。 |
-| 证据 | 哈希、脱敏状态、本地 blob、内容 API、证据复核、replay plan、安全 replay。 |
-| 报告 | 证据支撑的 Finding、验证状态、Markdown 报告、Run Export。 |
-| 采集 | HTTP exchange capture、HAR import、browser snapshot、browser session、显式 HTTP proxy capture。 |
-| 领域导入 | SARIF、Android Manifest、Cloud IAM policy、Identity Graph。 |
-| 可观测性 | Trace span、成本账本、评估、scorecard、capability radar、evidence quality、delivery readiness、enterprise pentest scorer、vulnerability lifecycle、run supervisor。 |
-| 生态 | Tool Packs、Toolbox Profiles、Toolbox Bundles、Connector Registry、integration backlog。 |
-| CI | GitHub Actions 覆盖 install、typecheck、test 和 build。 |
+---
 
-### Tool Gateway
+## 10. 安全模型
 
-当前暴露的高层工具都经过策略门控：
+### 10.1 风险等级
 
-| 工具 | 用途 |
-| --- | --- |
-| `http.request` | 范围检查后的 HTTP 请求采集。 |
-| `browser.navigate` | 浏览器会话导航证据。 |
-| `scanner.run_template` | 受治理的扫描模板计划或执行。 |
-| `shell.run_sandboxed` | 通过 allowlist 限制的 shell 命令执行。 |
-| `credential.use_placeholder` | 审计化的占位凭据使用，不存 raw secret。 |
-| `access.compare_evidence` | 同一 Run 内的访问差异证据复核。 |
-| `oast.start_session` | 本地或显式配置的 interactsh-compatible OAST 会话计划和审批流程。 |
-| `oast.record_callback` | 脱敏后的 OAST callback 证据。 |
-| `finding.propose` | 基于证据提出候选 Finding。 |
-
-内置扫描模板包括 Web 安全头、端点发现、认证端点发现、API 版本发现、Host header 探测、查询参数主动探测、技术指纹、Cookie flags、CORS/CSP 分析、JavaScript 资产清单、OpenAPI/OAuth 发现、GraphQL introspection plan、DNS records 和 TLS certificate capture。
-
-nuclei、ffuf、httpx、sqlmap、nmap、tlsx、semgrep、apktool、Frida 等外部模板目前用于计划和 readiness 展示。只有当运行时 profile 和显式策略门禁都满足时才允许执行，否则默认阻断。
-
-### API 概览
-
-主要路由组：
-
-| 分组 | 示例路由 |
-| --- | --- |
-| 健康检查和控制台 | `GET /`, `GET /health`, `GET /app` |
-| Run 和图状态 | `GET /runs`, `POST /runs`, `GET /runs/{id}/graph`, `GET /runs/{id}/progress` |
-| Operator 工作台 | `GET /runs/{id}/mission-control`, `/workbench`, `/flow`, `/surface`, `/search-plan` |
-| Dispatcher | `POST /runs/{id}/dispatch`, `POST /runs/{id}/autopilot/tick`, `POST /intents/{id}/heartbeat` |
-| Workers | `GET /runs/{id}/workers`, `/worker-envelope/preview`, `/worker-selection`, `/worker-evaluation-plan` |
-| Tools | `GET /tool-catalog`, `POST /runs/{id}/tools/plan`, `POST /runs/{id}/tools` |
-| 证据和复核 | `POST /runs/{id}/evidence`, `GET /evidence/{id}/content`, `POST /evidence/{id}/review` |
-| 采集 | `POST /runs/{id}/captures/http-exchange`, `/captures/har`, `/captures/browser-snapshot` |
-| Findings 和报告 | `POST /runs/{id}/findings`, `POST /findings/{id}/validation`, `POST /reports`, `POST /runs/{id}/exports` |
-
-完整请求和响应示例见 [docs/API.md](docs/API.md)。
-
-### 安全模型
-
-风险等级：
-
-| 等级 | 含义 |
-| --- | --- |
-| `R0` | 被动读取或仅元数据动作。 |
-| `R1` | 普通 HTTP/browser 动作，必须在授权范围内。 |
-| `R2` | 扫描或有限 fuzzing，必须满足策略和范围。 |
-| `R3` | Exploit validation、OAST、状态变更检查或跨角色认证测试，需要显式审批。 |
-| `R4` | 破坏性动作、凭据窃取、持久化、数据外传、暴力破解或越权行为，默认阻断；break-glass 使用需要匹配 scope token 和审批。 |
-
-Fail-closed 行为：
-
-- denylist 覆盖 allowlist。
-- 越权目标在执行或采集存储前被阻断。
-- 不支持的工具和不允许的 HTTP 方法会被阻断。
-- R3 动作需要绑定同一 Run、tool、target 和 risk level 的审批。
-- R4 默认阻断；只有 Run 配置了匹配 break-glass scope token、请求提交该 token、范围/方法门禁通过且审批通过时才允许。
-- Break-glass R4 token 只保留在内部门控路径；API 的 run/graph/review 响应、Worker envelope 和 run export 都会脱敏。
-- 工具调用和审批记录只保存脱敏后的目标和参数。
-- `workerPool.env` 中疑似 secret 的值会被拒绝。
-- 没有同 Run 证据的 Finding 会被拒绝。
-- confirmed Finding 要求绑定 useful-reviewed evidence。
-- 报告默认只包含 `confirmed_only`。
-- raw local-only evidence 默认不进入报告和导出包。
-
-详细模型见 [docs/SECURITY_MODEL.md](docs/SECURITY_MODEL.md)。
-
-### 配置
-
-| 变量 | 默认值 | 用途 |
+| 等级 | 含义 | 默认处理 |
 | --- | --- | --- |
-| `PORT` | `4317` | 本地 API 端口。 |
-| `PLATFORM_DB_PATH` | `.local/platform.db` | SQLite 状态路径。 |
-| `PLATFORM_API_TOKEN` | 必填 | 本地 API bearer token。必须在进程外生成，并避免进入日志。 |
-| `OPENAI_API_KEY` | 未设置 | 未来或 CLI Worker 使用的 provider key；必须保存在 API 进程环境变量里。 |
-| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | 可选 OpenAI-compatible base URL。 |
-| `OPENAI_MODEL` | `gpt-4.1-mini` | 可选 Worker 默认模型。 |
-| `PLATFORM_ALLOW_EXTERNAL_TOOLBOX` | `0` | 只有设置为 `1` 时才允许外部扫描器执行。 |
-| `PLATFORM_ALLOWED_SCANNER_TEMPLATES` | 空 | 逗号分隔的外部模板 allowlist；`*` 表示允许所有注册模板。 |
-| `PLATFORM_ENABLE_CONTAINER_TOOLBOX` | `0` | 启用 container toolbox profile probing。 |
-| `PLATFORM_CONTAINER_RUNTIME` | `docker` | 容器运行时命令。 |
-| `PLATFORM_ENABLE_LOCAL_SAST` | `0` | 启用本地 SAST profile probing。 |
-| `PLATFORM_ENABLE_ANDROID_TOOLBOX` | `0` | 启用 Android toolbox profile probing。 |
+| `R0` | 元数据、被动读取、内部整理 | 可执行 |
+| `R1` | 普通 HTTP 或浏览器动作 | 必须在 scope 内 |
+| `R2` | 扫描、有限 fuzzing、主动探测 | 必须在 scope 内，受策略和速率限制 |
+| `R3` | exploit validation、OAST、状态变化、跨角色测试 | 必须人工审批 |
+| `R4` | 破坏、凭据窃取、持久化、外传、暴力破解、越权 | 默认阻断，break-glass 也需要 token 和审批 |
 
-不要把 API key、密码、Cookie、JWT、证书、HAR、本地数据库、浏览器 profile 或 raw evidence export 提交进 Git。
+### 10.2 Fail-closed 规则
 
-### 仓库结构
+AgentRed 宁可阻断，也不默认冒险。
+
+- 目标不在 allowlist：阻断。
+- 目标在 denylist：阻断。
+- HTTP 方法不允许：阻断。
+- 工具未注册：阻断。
+- 风险等级超出策略：阻断。
+- R3 没审批：阻断并生成 approval request。
+- R4 没 break-glass token：阻断。
+- Finding 没 evidence：拒绝。
+- 报告没有 confirmed finding：拒绝。
+- raw local-only evidence 默认不导出。
+- 发现疑似 secret 的 Worker env：拒绝。
+
+### 10.3 证据要求
+
+一个可交付漏洞至少应该具备：
+
+1. 受影响资产。
+2. 触发条件。
+3. 证据 ID。
+4. 影响说明。
+5. 复现步骤。
+6. 修复建议。
+7. 验证状态。
+8. 复核记录。
+
+没有证据的“感觉像漏洞”不能进入正式报告。
+
+---
+
+## 11. 项目结构
 
 ```text
 .
 |-- src/
-|   |-- api/                 本地 REST API 和 Operator Console 路由
-|   |-- domain/              共享契约、id 和风险类型
-|   |-- graph/               Run Graph 状态服务
-|   |-- dispatcher/          Worker 调度和 intent lease
-|   |-- workers/             Mock worker、CLI adapter、protocol envelope
-|   |-- tools/               Tool Gateway、templates、packs、toolbox readiness
-|   |-- captures/            Browser 和 proxy session 服务
-|   |-- evidence/            Evidence engine 和 review service
-|   |-- findings/            证据支撑的 finding service
-|   |-- reports/             Report 和 run export 生成
-|   |-- scope/               Scope evaluation 和 program import
-|   |-- strategy/            Strategy 和 Search Plan read models
-|   |-- surface/             Attack Surface Map read model
-|   |-- observability/       Scorecards、radar、delivery、eval、leaderboard
-|   |-- agents/              Agent Framework、Harness、Workbench read models
-|   |-- desktop/             Local runner 和 desktop readiness read models
-|   |-- skills/              Domain Skill registry 和 readiness
-|   |-- poc/                 Curated PoC evidence templates
-|   |-- connectors/          Connector metadata 和 governed mappings
-|   |-- access/              同 Run access review 和 diff evidence
-|   |-- credentials/         Credential reference metadata
-|   |-- oast/                Local OAST callback inbox
-|   |-- sast/                SARIF import
-|   |-- mobile/              Android Manifest import
-|   |-- cloud/               Cloud IAM policy import
-|   |-- identity/            Identity Graph import
-|   |-- storage/             In-memory 和 SQLite stores
-|   `-- index.ts             本地服务入口
-|-- tests/                   Node test suite
-|-- docs/                    架构、API、安全、发布说明和截图
-|-- .github/workflows/       CI
+|   |-- api/             REST API 和本地控制台
+|   |-- dispatcher/      AI Worker 调度、intent lease、多轮 explore
+|   |-- workers/         Worker 协议、Mock、CLI、Claude
+|   |-- tools/           Tool Gateway、扫描模板、toolbox
+|   |-- graph/           Run Graph 状态
+|   |-- evidence/        证据保存、哈希、内容读取
+|   |-- findings/        Finding 创建和验证
+|   |-- reports/         报告和导出
+|   |-- scope/           授权范围判断
+|   |-- strategy/        策略建议、Autopilot phase gate
+|   |-- scanners/        Scanner result import
+|   |-- oast/            OAST 会话和 callback 证据
+|   |-- credentials/     Credential reference
+|   |-- access/          跨角色 evidence compare
+|   |-- observability/   监督、评分、雷达、成本和质量指标
+|   |-- storage/         内存和 SQLite 存储
+|   `-- index.ts         服务入口
+|-- tests/               平台回归测试
+|-- docs/                架构、API、安全模型、路线图
 |-- package.json
 |-- tsconfig.json
 `-- README.md
 ```
 
-### 开发
+---
 
-常用命令：
+## 12. 常用命令
+
+| 命令 | 作用 |
+| --- | --- |
+| `npm ci` | 安装依赖 |
+| `npm run dev` | 启动本地 API |
+| `npm run typecheck` | TypeScript 类型检查 |
+| `npm test` | 运行全部测试 |
+| `npm run build` | 编译到 `dist/` |
+
+---
+
+## 13. 开发规则
+
+如果你要改这个项目，请守住这些线：
+
+1. 不让 Worker 直接执行工具。
+2. 不让 Worker 直接写 evidence、finding、approval、report。
+3. 不绕过 ScopePolicy。
+4. 不绕过 Tool Gateway。
+5. 不把 secret 写进代码、日志、测试 fixture 或 README。
+6. 安全敏感逻辑必须有测试。
+7. 任何外部 scanner 都必须 typed adapter、allowlist、profile readiness、scope gate。
+8. 高风险动作必须能被审计和复核。
+
+---
+
+## 14. 适合谁用
+
+适合：
+
+- 企业安全团队
+- 授权渗透测试团队
+- 红队平台研发
+- AppSec / DevSecOps 工程团队
+- 想把 AI 引入安全评估但不想失控的团队
+
+不适合：
+
+- 未授权测试
+- 偷凭据
+- 打生产破坏性 payload
+- 做持久化
+- 绕过检测
+- 数据外传
+- 把大模型当无限制攻击工具
+
+---
+
+## 15. 交付物是什么
+
+AgentRed 最终要交付的不是“AI 说发现了漏洞”，而是：
+
+```text
+Finding + Evidence + Review + Validation + Report + Export
+```
+
+也就是：
+
+- 这个漏洞是什么。
+- 影响哪个资产。
+- 为什么是漏洞。
+- 哪些证据支持它。
+- 谁复核过证据。
+- 风险等级是多少。
+- 如何复现。
+- 如何修复。
+- 是否已经进入报告。
+- 是否可以交付给客户或内部团队。
+
+这才是企业能用的红队智能体。
+
+---
+
+## 16. English Summary
+
+AgentRed is a local-first AI red team workbench for authorized, evidence-driven security assessments.
+
+It does not give the model direct control over tools or state. AI Workers propose structured actions. The Dispatcher advances the run graph. The Tool Gateway enforces scope, risk, approval, rate, and evidence gates. Evidence is stored locally, hashed, redacted, reviewed, and then tied to findings, reports, and exports.
+
+Quick start:
 
 ```bash
 npm ci
-npm run dev
 npm run typecheck
 npm test
 npm run build
+PLATFORM_API_TOKEN=local-dev-token npm run dev
 ```
 
-脚本说明：
+Open:
 
-| 脚本 | 作用 |
-| --- | --- |
-| `npm run dev` | 使用 `tsx` 运行 `src/index.ts`。 |
-| `npm run typecheck` | 执行 TypeScript `--noEmit` 类型检查。 |
-| `npm test` | 使用 `tsx --test tests/*.test.ts` 运行 Node 测试。 |
-| `npm run build` | 使用 `tsc -p tsconfig.json` 编译 TypeScript。 |
+```text
+http://127.0.0.1:4317/app
+```
 
-开发规则：
+Read more:
 
-- 保持本地优先安全模型。
-- 不增加 Worker 直接写状态的路径。
-- 不绕过 Tool Gateway、scope、approval、audit、evidence 或 redaction controls。
-- 安全敏感行为需要补 focused tests。
-- API 路由或 Operator workflow 变化时同步更新文档。
-
-### 当前限制
-
-AgentRed 目前是平台内核，不是完整托管产品。以下仍在路线图中：
-
-- Tauri + React 桌面产品
-- Rust 本地 daemon 和 desktop runner 编排
-- TLS MITM proxy 和本地 CA 生命周期
-- 带 JavaScript 执行能力的真实浏览器自动化
-- 默认开启的 Docker/Podman 外部 toolbox 执行
-- 完整 Public OAST relay 轮询和租户保留控制
-- Cloud tenant、RBAC、SSO、billing 和 redacted sync
-- 生产级关系型存储和迁移
-
-成熟化路径记录在 [Maturity Roadmap](docs/MATURITY_ROADMAP.md)，更深入的高星 AI 红队智能体、LLM 红队框架、MCP 工具体系和成熟 AgentOps 对标见 [AI Red Team Agent Reference Analysis](docs/AI_RED_TEAM_AGENT_REFERENCE_ANALYSIS.md)。企业级高危漏洞识别和渗透测试工作流见 [Enterprise Pentest Agent Workflows](docs/ENTERPRISE_PENTEST_AGENT_WORKFLOWS.md)，其中纳入了 Z3r0 式多角色工作台、真实浏览器/代理 Runner、typed scanner adapter、scorer、证据中心和漏洞生命周期。这些参考会被映射成 AgentRed 自己的 API、证据契约、解析器和路线图门禁。
-
-### 文档
-
+- [API](docs/API.md)
 - [Architecture](docs/ARCHITECTURE.md)
-- [API Reference](docs/API.md)
 - [Security Model](docs/SECURITY_MODEL.md)
 - [Maturity Roadmap](docs/MATURITY_ROADMAP.md)
-- [AI Red Team Agent Reference Analysis](docs/AI_RED_TEAM_AGENT_REFERENCE_ANALYSIS.md)
 - [Enterprise Pentest Agent Workflows](docs/ENTERPRISE_PENTEST_AGENT_WORKFLOWS.md)
-- [Publishing Checklist](docs/PUBLISHING.md)
-- [Contributing](CONTRIBUTING.md)
-- [Security Policy](SECURITY.md)
 
-### 许可证
+---
 
-MIT。见 [LICENSE](LICENSE)。
+## 17. License
+
+MIT. See [LICENSE](LICENSE).
