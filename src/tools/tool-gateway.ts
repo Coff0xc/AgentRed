@@ -22,6 +22,7 @@ import type { CredentialReferenceService } from '../credentials/credential-refer
 import type { EvidenceEngine } from '../evidence/evidence-engine.js';
 import type { FindingService } from '../findings/finding-service.js';
 import type { OastService } from '../oast/oast-service.js';
+import type { ScannerResultImportService } from '../scanners/scanner-result-import-service.js';
 import type { RunEventService } from '../events/run-event-service.js';
 import type { ObservabilityService } from '../observability/observability-service.js';
 import { redactArgs, redactHeaders, redactText, redactUrl } from '../security/redaction.js';
@@ -182,6 +183,7 @@ export class ToolGateway {
     private readonly credentials?: CredentialReferenceService,
     private readonly accessReviews?: AccessReviewService,
     private readonly oast?: OastService,
+    private readonly scannerResults?: ScannerResultImportService,
   ) {}
 
   catalog(): ToolCatalogEntry[] {
@@ -978,6 +980,22 @@ export class ToolGateway {
       redactionState: 'redacted',
       toolCallId,
     });
+
+    // Auto-parse Nuclei JSONL output into structured findings when the service is available
+    if (decision.plan.engine === 'nuclei' && this.scannerResults && result.stdout.trim()) {
+      try {
+        this.scannerResults.import({
+          runId: input.runId,
+          source: `nuclei:${request.template}`,
+          engine: 'nuclei',
+          content: result.stdout,
+          createFindings: true,
+        });
+      } catch {
+        // Parsing failures are non-fatal; raw stdout evidence is already stored above
+      }
+    }
+
     return { evidenceId: evidence.id, exitCode: result.exitCode, timedOut: result.timedOut };
   }
 

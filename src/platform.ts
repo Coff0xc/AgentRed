@@ -170,6 +170,7 @@ export function createPlatform(options: { databasePath?: string } = {}): Platfor
     credentials,
     accessReviews,
     oast,
+    scannerResults,
   );
   const toolPacks = new ToolPackService(store, tools, events);
   const connectorRuns = new ConnectorRunService(store, connectors, tools, events);
