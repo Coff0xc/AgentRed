@@ -106,6 +106,9 @@ function parseWorkerResult(workerName: string, output: string): WorkerTaskResult
   if (data.description !== undefined && typeof data.description !== 'string') {
     throw new Error(`Worker ${workerName} returned invalid explore description`);
   }
+  if (data.continueExplore !== undefined && typeof data.continueExplore !== 'boolean') {
+    throw new Error(`Worker ${workerName} returned invalid continueExplore flag`);
+  }
   return result as WorkerTaskResult;
 }
 

@@ -33,6 +33,8 @@ export type WorkerTask =
       pocTemplates?: WorkerPocTemplateContext[];
       toolboxBundles?: WorkerToolboxBundleContext[];
       connectors?: WorkerConnectorContext[];
+      /** Evidence IDs produced in prior rounds of a multi-round explore. Present only on round >= 2. */
+      producedEvidenceIds?: string[];
     };
 
 export interface WorkerToolRequest {
@@ -54,6 +56,9 @@ export type WorkerTaskResult =
         intent?: { description: string; from: string[]; riskLevel?: 'R0' | 'R1' | 'R2' | 'R3' | 'R4' };
         description?: string;
         toolRequests?: WorkerToolRequest[];
+        /** When true, the dispatcher will re-invoke this worker after executing toolRequests,
+         *  passing back the produced evidence IDs so the worker can reason on actual results. */
+        continueExplore?: boolean;
       };
     }
   | { accepted: false; reason: string };

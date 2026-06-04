@@ -3,6 +3,19 @@ import { strategyHintsForWorker } from '../strategy/strategy-service.js';
 import type { WorkerTask } from './types.js';
 import { redactRun } from '../security/redaction.js';
 
+export interface SessionSummary {
+  /** Non-system facts confirmed so far (max 10, oldest first). */
+  confirmedFacts: string[];
+  /** Concluded intent hypotheses with their outcome descriptions (max 8). */
+  concludedIntents: Array<{ hypothesis: string; conclusion: string }>;
+  /** Titles of findings already proposed in this run (max 8). */
+  proposedFindingTitles: string[];
+  /** Hypotheses that were released/failed and should not be re-attempted (max 6). */
+  failedHypotheses: string[];
+  /** Evidence kinds and counts — tells the worker what has already been collected. */
+  evidenceKindCounts: Record<string, number>;
+}
+
 export interface WorkerProtocolEnvelope {
   protocolVersion: 'agent-worker.v1';
   role: 'agentred-worker';
@@ -21,8 +34,50 @@ export interface WorkerProtocolEnvelope {
   connectors: NonNullable<WorkerTask['connectors']>;
   strategyHints: string[];
   strategyRecommendations: Array<Record<string, unknown>>;
+  /** Cross-round session summary derived from the run graph. Helps the worker avoid
+   *  repeating already-explored paths and build on confirmed facts across dispatches. */
+  sessionSummary: SessionSummary;
   outputSchema: Record<string, unknown>;
   examples: Array<Record<string, unknown>>;
+}
+
+export function buildSessionSummary(task: WorkerTask): SessionSummary {
+  const { graph } = task;
+
+  const confirmedFacts = graph.facts
+    .filter((f) => !f.createdBy.startsWith('system.'))
+    .slice(-10)
+    .map((f) => f.statement);
+
+  // Conclusion statement lives in the Fact created by concludeIntent (fromIntentId link)
+  const factByIntentId = new Map(
+    graph.facts.filter((f) => f.fromIntentId).map((f) => [f.fromIntentId as string, f.statement]),
+  );
+  const concludedIntents = graph.intents
+    .filter((i) => i.status === 'concluded')
+    .slice(-8)
+    .map((i) => ({
+      hypothesis: i.hypothesis,
+      conclusion: factByIntentId.get(i.id) ?? i.hypothesis,
+    }));
+
+  const failedHypotheses = graph.intents
+    .filter((i) => i.status === 'released' && i.releaseReason)
+    .slice(-6)
+    .map((i) => i.releaseReason as string);
+
+  const proposedFindingTitles = graph.findings
+    .filter((f) => f.validationState !== 'rejected')
+    .slice(-8)
+    .map((f) => f.title);
+
+  const evidenceKindCounts: Record<string, number> = {};
+  for (const e of graph.evidence) {
+    if (e.kind === 'replay_bundle') continue;
+    evidenceKindCounts[e.kind] = (evidenceKindCounts[e.kind] ?? 0) + 1;
+  }
+
+  return { confirmedFacts, concludedIntents, failedHypotheses, proposedFindingTitles, evidenceKindCounts };
 }
 
 export function buildWorkerProtocolEnvelope(task: WorkerTask): WorkerProtocolEnvelope {
@@ -45,6 +100,7 @@ export function buildWorkerProtocolEnvelope(task: WorkerTask): WorkerProtocolEnv
         'Use enabled connectors only as governed capability metadata; connector enablement is not permission to call external MCP, CLI, HTTP API, or container adapters.',
         'Credentials are represented only as credentialReferences; never ask for or emit raw secret material.',
         'Every candidate finding must reference evidence through finding.propose.',
+        'Use sessionSummary to avoid repeating concluded intents, already-proposed findings, and failed hypotheses.',
       ],
       toolUse: [
         'Request high-level tools only through data.toolRequests.',
@@ -60,6 +116,7 @@ export function buildWorkerProtocolEnvelope(task: WorkerTask): WorkerProtocolEnv
         'For bootstrap, return data.fact.description or data.complete.description.',
         'For reason, return data.intent or data.complete.',
         'For explore, return data.description and optional data.toolRequests.',
+        'For explore, set data.continueExplore=true to request another round after toolRequests execute; the next task will include producedEvidenceIds with all evidence collected so far.',
         'On uncertainty or refusal, return {"accepted":false,"reason":"..."}',
       ],
     },
@@ -78,6 +135,7 @@ export function buildWorkerProtocolEnvelope(task: WorkerTask): WorkerProtocolEnv
       ...connectorHints(task),
     ],
     strategyRecommendations: workerStrategyRecommendations(safeTask),
+    sessionSummary: buildSessionSummary(task),
     outputSchema: workerOutputSchema(),
     examples: workerExamples(),
   };
@@ -235,6 +293,7 @@ function workerOutputSchema(): Record<string, unknown> {
         riskLevel: 'R0|R1|R2|R3|R4 optional',
       },
       description: 'string optional for explore conclusion',
+      continueExplore: 'boolean optional; set true to request another explore round after toolRequests execute',
       toolRequests: [
         {
           tool: 'http.request|scanner.run_template|credential.use_placeholder|access.compare_evidence|oast.start_session|oast.record_callback|finding.propose|...',
@@ -292,6 +351,44 @@ function workerExamples(): Array<Record<string, unknown>> {
             purpose: 'Create an evidence-backed candidate finding for human review.',
           },
         ],
+      },
+    },
+    {
+      _comment: 'Multi-round explore: round 1 captures baseline, round 2 uses producedEvidenceIds to decide next step',
+      round1: {
+        accepted: true,
+        data: {
+          description: 'Captured baseline; continuing to probe parameter reflection.',
+          continueExplore: true,
+          toolRequests: [
+            { tool: 'http.request', target: 'https://app.example.com/search', method: 'GET', riskLevel: 'R1', args: {} },
+          ],
+        },
+      },
+      round2_task_includes: { producedEvidenceIds: ['<evidence-id-from-round-1>'] },
+      round2: {
+        accepted: true,
+        data: {
+          description: 'Baseline confirmed reflection. Proposed finding backed by both evidence items.',
+          toolRequests: [
+            {
+              tool: 'finding.propose',
+              target: 'https://app.example.com/search',
+              method: 'POST',
+              riskLevel: 'R0',
+              args: {
+                title: 'Reflected parameter in search endpoint',
+                severity: 'medium',
+                confidence: 'likely',
+                affectedAssets: ['https://app.example.com/search'],
+                evidenceIds: ['$produced'],
+                reproSteps: ['Replay the captured HTTP exchanges.'],
+                impact: 'Parameter value is reflected in the response.',
+                remediation: 'Encode output and validate input server-side.',
+              },
+            },
+          ],
+        },
       },
     },
   ];
