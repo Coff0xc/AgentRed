@@ -11,7 +11,7 @@ export type AccessReviewStatus = 'draft' | 'evidence_ready' | 'differential_obse
 export type AccessReviewSide = 'baseline' | 'comparison';
 export type SarifImportStatus = 'imported';
 export type ScannerResultImportStatus = 'imported';
-export type ScannerResultEngine = 'nuclei' | 'semgrep' | 'generic';
+export type ScannerResultEngine = 'nuclei' | 'semgrep' | 'httpx' | 'ffuf' | 'sqlmap' | 'nmap' | 'tlsx' | 'generic';
 export type CaptureImportStatus = 'imported';
 export type AndroidManifestImportStatus = 'imported';
 export type ProgramScopeImportStatus = 'imported';
@@ -146,6 +146,7 @@ export type RunEventType =
   | 'capture.imported'
   | 'sarif.imported'
   | 'scanner.result.imported'
+  | 'scanner.result.import_failed'
   | 'evidence.reviewed';
 export type RunPhase = 'bootstrapping' | 'reasoning' | 'queued' | 'exploring' | 'awaiting_approval' | 'completed' | 'stopped';
 

@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, statSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 
 import { newId, nowIso } from '../domain/ids.js';
 import type { RegisteredToolboxBundle, RiskLevel, RunToolboxBundleBinding } from '../domain/types.js';
@@ -399,6 +399,16 @@ export class ToolboxRunner {
           reason: 'Set PLATFORM_ENABLE_LOCAL_SAST=1 to probe local SAST commands.',
         };
       }
+      const workspaceCheck = localSastWorkspaceCheck();
+      if (!workspaceCheck.workspace) {
+        return {
+          ...profile,
+          available: false,
+          runtimeStatus: 'unavailable',
+          runner: 'none',
+          reason: workspaceCheck.reason,
+        };
+      }
       const semgrep = await firstAvailableCommand(['semgrep']);
       return semgrep
         ? { ...profile, available: true, runtimeStatus: 'available', runner: 'local' }
@@ -618,7 +628,9 @@ function planArgs(template: ToolTemplateProfile, profile: ToolboxRuntimeProfile,
     }
   }
   if (template.engine === 'semgrep') {
-    return ['scan', '--json', '--config', 'auto'];
+    const workspace = localSastWorkspaceCheck().workspace ?? '<PLATFORM_SAST_WORKSPACE-required>';
+    const config = process.env.PLATFORM_SEMGREP_CONFIG?.trim() || 'auto';
+    return ['scan', '--json', '--metrics=off', '--disable-version-check', '--config', config, workspace];
   }
   if (template.engine === 'apktool') {
     return ['d', '<apk-artifact>', '-o', '<ephemeral-output>'];
@@ -649,6 +661,26 @@ function targetHost(target: string): string {
     return new URL(target).hostname;
   } catch {
     return target.replace(/\/.*$/, '');
+  }
+}
+
+function localSastWorkspaceCheck(): { workspace?: string; reason: string } {
+  const raw = process.env.PLATFORM_SAST_WORKSPACE?.trim();
+  if (!raw) {
+    return {
+      reason:
+        'Set PLATFORM_SAST_WORKSPACE to an explicit source workspace; local SAST never defaults to the platform process cwd.',
+    };
+  }
+  const workspace = resolve(raw);
+  try {
+    const stat = statSync(workspace);
+    if (!stat.isDirectory()) {
+      return { reason: `PLATFORM_SAST_WORKSPACE is not a directory: ${workspace}` };
+    }
+    return { workspace, reason: 'local SAST workspace is configured' };
+  } catch {
+    return { reason: `PLATFORM_SAST_WORKSPACE does not exist: ${workspace}` };
   }
 }
 

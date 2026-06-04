@@ -2633,10 +2633,19 @@ function validateIdentityGraphProvider(input: unknown): IdentityGraphProvider {
 }
 
 function validateScannerResultEngine(input: unknown): ScannerResultEngine {
-  if (input === 'nuclei' || input === 'semgrep' || input === 'generic') {
+  if (
+    input === 'nuclei' ||
+    input === 'semgrep' ||
+    input === 'httpx' ||
+    input === 'ffuf' ||
+    input === 'sqlmap' ||
+    input === 'nmap' ||
+    input === 'tlsx' ||
+    input === 'generic'
+  ) {
     return input;
   }
-  throw new HttpError(400, 'engine must be nuclei, semgrep, or generic');
+  throw new HttpError(400, 'engine must be nuclei, semgrep, httpx, ffuf, sqlmap, nmap, tlsx, or generic');
 }
 
 function validateLocalRunnerWorkbenchPrepare(input: unknown): {

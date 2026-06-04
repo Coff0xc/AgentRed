@@ -12,6 +12,7 @@ import type {
   EvidenceKind,
   ProposeFindingInput,
   RiskLevel,
+  ScannerResultEngine,
   Severity,
   ToolInvocation,
 } from '../domain/types.js';
@@ -981,18 +982,30 @@ export class ToolGateway {
       toolCallId,
     });
 
-    // Auto-parse Nuclei JSONL output into structured findings when the service is available
-    if (decision.plan.engine === 'nuclei' && this.scannerResults && result.stdout.trim()) {
+    // Auto-parse structured scanner output into findings when the service is available.
+    // Each engine has a dedicated JSONL/JSON normalizer in ScannerResultImportService.
+    const autoParseEngine = autoParseEngineFor(decision.plan.engine);
+    if (autoParseEngine && this.scannerResults && result.stdout.trim()) {
       try {
         this.scannerResults.import({
           runId: input.runId,
-          source: `nuclei:${request.template}`,
-          engine: 'nuclei',
+          source: `${decision.plan.engine}:${request.template}`,
+          engine: autoParseEngine,
           content: result.stdout,
-          createFindings: true,
+          // Confirmation engines (nuclei/sqlmap) create candidate findings; discovery
+          // engines (httpx/ffuf/nmap/tlsx) only store evidence + an import record.
+          createFindings: autoCreateFindingsFor(autoParseEngine),
         });
-      } catch {
-        // Parsing failures are non-fatal; raw stdout evidence is already stored above
+      } catch (error) {
+        // Parsing failures are non-fatal; raw stdout evidence is already stored above.
+        this.events?.record({
+          runId: input.runId,
+          type: 'scanner.result.import_failed',
+          title: 'Scanner result auto-import failed',
+          detail: `${autoParseEngine}:${request.template}: ${error instanceof Error ? error.message : 'parse failed'}`,
+          level: 'warning',
+          entityId: toolCallId,
+        });
       }
     }
 
@@ -3393,6 +3406,24 @@ function isShellCommandAllowed(command: string): boolean {
 
 function commandDisplayName(command: string): string {
   return basename(command).toLowerCase();
+}
+
+/** Maps a toolbox engine to the scanner-result normalizer engine, or undefined if none exists. */
+function autoParseEngineFor(engine: string): ScannerResultEngine | undefined {
+  if (engine === 'nuclei') return 'nuclei';
+  if (engine === 'httpx') return 'httpx';
+  if (engine === 'ffuf') return 'ffuf';
+  if (engine === 'sqlmap') return 'sqlmap';
+  if (engine === 'nmap') return 'nmap';
+  if (engine === 'tlsx') return 'tlsx';
+  if (engine === 'semgrep') return 'semgrep';
+  return undefined;
+}
+
+/** Confirmation engines whose normalized results become candidate findings automatically.
+ *  Discovery engines (httpx, ffuf, nmap, tlsx) only store evidence + an import record. */
+function autoCreateFindingsFor(engine: ScannerResultEngine): boolean {
+  return engine === 'nuclei' || engine === 'sqlmap' || engine === 'semgrep';
 }
 
 function runSandboxProcess(

@@ -2837,6 +2837,429 @@ test('scanner result import normalizes Nuclei JSONL into evidence-backed candida
   assert.ok(platform.events.list(run.id).some((event) => event.type === 'scanner.result.imported'));
 });
 
+test('scanner result import normalizes httpx JSONL into info-level discovery records without auto-escalating severity', () => {
+  const platform = createPlatform();
+  const run = platform.graph.createRun({
+    target: 'https://app.example.com',
+    goal: 'Import httpx discovery results',
+    scopePolicy: policy,
+    workerPool: [{ name: 'mock-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+  const result = platform.scannerResults.import({
+    runId: run.id,
+    source: 'httpx:web.httpx.fingerprint',
+    engine: 'httpx',
+    createFindings: true,
+    content: [
+      JSON.stringify({
+        url: 'https://app.example.com?token=raw-secret',
+        input: 'https://app.example.com',
+        status_code: 200,
+        title: 'App Dashboard',
+        webserver: 'nginx',
+        content_type: 'text/html',
+        tech: ['Next.js', 'React'],
+      }),
+      JSON.stringify({ url: 'https://api.app.example.com', status_code: 403, webserver: 'envoy' }),
+    ].join('\n'),
+  });
+
+  assert.equal(result.importRecord.engine, 'httpx');
+  assert.equal(result.importRecord.results, 2);
+  // httpx is discovery only — never high/critical
+  assert.equal(result.importRecord.highOrCritical, 0);
+  // Even with createFindings:true, the import path normalizes severity to info
+  const evidenceContent = platform.evidence.readEvidenceContent(result.evidenceId).toString('utf8');
+  assert.ok(evidenceContent.includes('"engine":"httpx"') || evidenceContent.includes('"engine": "httpx"'));
+  assert.ok(evidenceContent.includes('Next.js'));
+  // Secrets in URLs are redacted
+  assert.ok(!evidenceContent.includes('raw-secret'));
+});
+
+test('scanner result import normalizes ffuf JSON results array into discovery records', () => {
+  const platform = createPlatform();
+  const run = platform.graph.createRun({
+    target: 'https://app.example.com',
+    goal: 'Import ffuf content discovery results',
+    scopePolicy: policy,
+    workerPool: [{ name: 'mock-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+  const result = platform.scannerResults.import({
+    runId: run.id,
+    source: 'ffuf:web.ffuf.content_discovery',
+    engine: 'ffuf',
+    createFindings: false,
+    content: JSON.stringify({
+      results: [
+        { input: { FUZZ: 'admin' }, url: 'https://app.example.com/admin', status: 200, length: 1234, words: 56 },
+        { input: { FUZZ: 'backup' }, url: 'https://app.example.com/backup', status: 301, length: 0, words: 0 },
+      ],
+    }),
+  });
+
+  assert.equal(result.importRecord.engine, 'ffuf');
+  assert.equal(result.importRecord.results, 2);
+  assert.equal(result.importRecord.highOrCritical, 0);
+  const evidenceContent = platform.evidence.readEvidenceContent(result.evidenceId).toString('utf8');
+  assert.ok(evidenceContent.includes('admin'));
+  assert.ok(evidenceContent.includes('backup'));
+});
+
+test('scanner result import handles empty httpx and ffuf output without crashing', () => {
+  const platform = createPlatform();
+  const run = platform.graph.createRun({
+    target: 'https://app.example.com',
+    goal: 'Handle empty scanner output',
+    scopePolicy: policy,
+    workerPool: [{ name: 'mock-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+  const httpxEmpty = platform.scannerResults.import({ runId: run.id, source: 'httpx', engine: 'httpx', createFindings: false, content: '' });
+  assert.equal(httpxEmpty.importRecord.results, 0);
+  const ffufEmpty = platform.scannerResults.import({ runId: run.id, source: 'ffuf', engine: 'ffuf', createFindings: false, content: JSON.stringify({ results: [] }) });
+  assert.equal(ffufEmpty.importRecord.results, 0);
+});
+
+test('scanner result import normalizes sqlmap confirmed injections into high-severity candidate findings', () => {
+  const platform = createPlatform();
+  const run = platform.graph.createRun({
+    target: 'https://app.example.com',
+    goal: 'Import sqlmap confirmation results',
+    scopePolicy: policy,
+    workerPool: [{ name: 'mock-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+  const sqlmapText = [
+    'URL: https://app.example.com/item?id=1',
+    'sqlmap identified the following injection point(s):',
+    '---',
+    'Parameter: id (GET)',
+    '    Type: boolean-based blind',
+    "    Title: AND boolean-based blind - WHERE or HAVING clause",
+    '    Payload: id=1 AND 4523=4523',
+    '---',
+    'back-end DBMS: MySQL >= 5.0',
+  ].join('\n');
+  const result = platform.scannerResults.import({
+    runId: run.id,
+    source: 'sqlmap:web.sqlmap.verify',
+    engine: 'sqlmap',
+    createFindings: true,
+    content: sqlmapText,
+  });
+
+  assert.equal(result.importRecord.engine, 'sqlmap');
+  assert.equal(result.importRecord.results, 1);
+  assert.equal(result.importRecord.highOrCritical, 1);
+  assert.equal(result.findingIds.length, 1);
+  const finding = platform.store.state.findings[result.findingIds[0]];
+  assert.equal(finding.severity, 'high');
+  assert.equal(finding.confidence, 'likely');
+  assert.equal(finding.validationState, 'candidate');
+  assert.ok(finding.title.includes('id'));
+});
+
+test('scanner result import treats sqlmap output with no injection point as zero results', () => {
+  const platform = createPlatform();
+  const run = platform.graph.createRun({
+    target: 'https://app.example.com',
+    goal: 'Handle clean sqlmap output',
+    scopePolicy: policy,
+    workerPool: [{ name: 'mock-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+  const result = platform.scannerResults.import({
+    runId: run.id,
+    source: 'sqlmap',
+    engine: 'sqlmap',
+    createFindings: true,
+    content: 'all tested parameters do not appear to be injectable.',
+  });
+  assert.equal(result.importRecord.results, 0);
+  assert.equal(result.findingIds.length, 0);
+});
+
+test('scanner result import normalizes nmap open ports into info-level discovery without findings', () => {
+  const platform = createPlatform();
+  const run = platform.graph.createRun({
+    target: 'https://app.example.com',
+    goal: 'Import nmap port discovery',
+    scopePolicy: policy,
+    workerPool: [{ name: 'mock-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+  const nmapText = [
+    'Starting Nmap 7.94',
+    'Nmap scan report for app.example.com (93.184.216.34)',
+    'Host is up (0.012s latency).',
+    'PORT     STATE SERVICE    VERSION',
+    '22/tcp   open  ssh        OpenSSH 8.9p1',
+    '443/tcp  open  https      nginx 1.24.0',
+    '8080/tcp open  http-proxy',
+  ].join('\n');
+  const result = platform.scannerResults.import({
+    runId: run.id,
+    source: 'nmap:network.nmap.safe_top_ports',
+    engine: 'nmap',
+    createFindings: true,
+    content: nmapText,
+  });
+
+  assert.equal(result.importRecord.engine, 'nmap');
+  assert.equal(result.importRecord.results, 3);
+  assert.equal(result.importRecord.highOrCritical, 0);
+  const evidenceContent = platform.evidence.readEvidenceContent(result.evidenceId).toString('utf8');
+  assert.ok(evidenceContent.includes('22'));
+  assert.ok(evidenceContent.includes('ssh'));
+  assert.ok(evidenceContent.includes('443'));
+});
+
+test('scanner result import normalizes tlsx JSONL certificate metadata and surfaces expiry/self-signed signals', () => {
+  const platform = createPlatform();
+  const run = platform.graph.createRun({
+    target: 'https://app.example.com',
+    goal: 'Import tlsx certificate metadata',
+    scopePolicy: policy,
+    workerPool: [{ name: 'mock-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+  const result = platform.scannerResults.import({
+    runId: run.id,
+    source: 'tlsx:network.tlsx.bulk_certificate',
+    engine: 'tlsx',
+    createFindings: true,
+    content: [
+      JSON.stringify({ host: 'app.example.com', port: '443', tls_version: 'tls13', not_after: '2027-01-01T00:00:00Z', issuer_dn: 'CN=Example CA' }),
+      JSON.stringify({ host: 'legacy.example.com', port: '443', tls_version: 'tls12', expired: true, self_signed: true, not_after: '2020-01-01T00:00:00Z' }),
+    ].join('\n'),
+  });
+
+  assert.equal(result.importRecord.engine, 'tlsx');
+  assert.equal(result.importRecord.results, 2);
+  assert.equal(result.importRecord.highOrCritical, 0);
+  const evidenceContent = platform.evidence.readEvidenceContent(result.evidenceId).toString('utf8');
+  assert.ok(evidenceContent.includes('app.example.com'));
+  assert.ok(evidenceContent.includes('expired') || evidenceContent.includes('self-signed'));
+});
+
+test('scanner result import normalizes Semgrep JSON into evidence-backed candidate findings via autoCreateFindings', () => {
+  const platform = createPlatform();
+  const run = platform.graph.createRun({
+    target: 'https://app.example.com',
+    goal: 'Import semgrep SAST results',
+    scopePolicy: policy,
+    workerPool: [{ name: 'mock-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+  const semgrepJson = JSON.stringify({
+    results: [
+      {
+        check_id: 'python.lang.security.audit.dangerous-subprocess-use',
+        path: 'src/runner.py',
+        start: { line: 42 },
+        extra: {
+          severity: 'ERROR',
+          message: 'Subprocess call with user-controlled input may allow command injection.',
+          metadata: { fix: 'Use subprocess with a list of arguments and shell=False.' },
+        },
+      },
+      {
+        check_id: 'generic.secrets.security.detected-private-key',
+        path: 'config/settings.py',
+        start: { line: 7 },
+        extra: {
+          severity: 'WARNING',
+          message: 'Hardcoded private key detected.',
+          metadata: {},
+        },
+      },
+    ],
+  });
+
+  const result = platform.scannerResults.import({
+    runId: run.id,
+    source: 'semgrep:sast.semgrep.baseline',
+    engine: 'semgrep',
+    createFindings: true,
+    content: semgrepJson,
+  });
+
+  assert.equal(result.importRecord.engine, 'semgrep');
+  assert.equal(result.importRecord.results, 2);
+  assert.equal(result.findingIds.length, 2);
+  const high = platform.store.state.findings[result.findingIds[0]];
+  assert.equal(high.severity, 'high');  // ERROR → high
+  assert.equal(high.confidence, 'needs_dynamic_confirmation');
+  assert.equal(high.validationState, 'candidate');
+  assert.ok(high.title.includes('subprocess'));
+  const medium = platform.store.state.findings[result.findingIds[1]];
+  assert.equal(medium.severity, 'medium'); // WARNING → medium
+  const evidenceContent = platform.evidence.readEvidenceContent(result.evidenceId).toString('utf8');
+  assert.ok(evidenceContent.includes('"engine":"semgrep"') || evidenceContent.includes('"engine": "semgrep"'));
+  assert.ok(evidenceContent.includes('runner.py'));
+});
+
+test('scanner result import redacts absolute Semgrep paths before creating findings', () => {
+  const previousWorkspace = process.env.PLATFORM_SAST_WORKSPACE;
+  delete process.env.PLATFORM_SAST_WORKSPACE;
+  const platform = createPlatform();
+  const run = platform.graph.createRun({
+    target: 'https://app.example.com',
+    goal: 'Import semgrep SAST results without leaking local paths',
+    scopePolicy: policy,
+    workerPool: [{ name: 'mock-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+  const absolutePath = join(tmpdir(), 'secret-client-name', 'src', 'runner.py');
+  try {
+    const result = platform.scannerResults.import({
+      runId: run.id,
+      source: 'semgrep:absolute-path',
+      engine: 'semgrep',
+      createFindings: true,
+      content: JSON.stringify({
+        results: [
+          {
+            check_id: 'python.lang.security.audit.dangerous-subprocess-use',
+            path: absolutePath,
+            start: { line: 42 },
+            extra: { severity: 'ERROR', message: 'Subprocess call with user-controlled input.' },
+          },
+        ],
+      }),
+    });
+    const finding = platform.store.state.findings[result.findingIds[0]];
+    assert.match(finding.affectedAssets[0], /^source-path:[a-f0-9]{12}:42$/);
+    const evidenceContent = platform.evidence.readEvidenceContent(result.evidenceId).toString('utf8');
+    assert.ok(!evidenceContent.includes('secret-client-name'));
+    assert.ok(!evidenceContent.includes(absolutePath));
+  } finally {
+    if (previousWorkspace === undefined) {
+      delete process.env.PLATFORM_SAST_WORKSPACE;
+    } else {
+      process.env.PLATFORM_SAST_WORKSPACE = previousWorkspace;
+    }
+  }
+});
+
+test('scanner result import keeps Semgrep paths relative to the configured SAST workspace', () => {
+  const previousWorkspace = process.env.PLATFORM_SAST_WORKSPACE;
+  const workspace = join(tmpdir(), `agentred-semgrep-${Date.now()}`);
+  mkdirSync(join(workspace, 'src'), { recursive: true });
+  process.env.PLATFORM_SAST_WORKSPACE = workspace;
+  const platform = createPlatform();
+  const run = platform.graph.createRun({
+    target: 'https://app.example.com',
+    goal: 'Import semgrep SAST results with relative paths',
+    scopePolicy: policy,
+    workerPool: [{ name: 'mock-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+  try {
+    const result = platform.scannerResults.import({
+      runId: run.id,
+      source: 'semgrep:relative-path',
+      engine: 'semgrep',
+      createFindings: true,
+      content: JSON.stringify({
+        results: [
+          {
+            check_id: 'typescript.express.security.audit.path-traversal',
+            path: join(workspace, 'src', 'routes.ts'),
+            start: { line: 12 },
+            extra: { severity: 'WARNING', message: 'Path traversal candidate.' },
+          },
+        ],
+      }),
+    });
+    const finding = platform.store.state.findings[result.findingIds[0]];
+    assert.equal(finding.affectedAssets[0], 'src/routes.ts:12');
+    const evidenceContent = platform.evidence.readEvidenceContent(result.evidenceId).toString('utf8');
+    assert.ok(evidenceContent.includes('src/routes.ts'));
+    assert.ok(!evidenceContent.includes(workspace));
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+    if (previousWorkspace === undefined) {
+      delete process.env.PLATFORM_SAST_WORKSPACE;
+    } else {
+      process.env.PLATFORM_SAST_WORKSPACE = previousWorkspace;
+    }
+  }
+});
+
+test('sast.semgrep.baseline adapterStatus is available and blocks when local SAST env is off', async () => {
+  const platform = createPlatform();
+  const run = platform.graph.createRun({
+    target: 'https://app.example.com',
+    goal: 'Verify semgrep template availability',
+    scopePolicy: policy,
+    workerPool: [{ name: 'mock-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+  const catalog = platform.tools.catalog();
+  const scanner = catalog.find((t) => t.name === 'scanner.run_template');
+  assert.ok(scanner);
+  const semgrepTemplate = scanner.templates.find((t) => t.id === 'sast.semgrep.baseline');
+  assert.ok(semgrepTemplate);
+  assert.equal(semgrepTemplate.adapterStatus, 'available');
+  assert.equal(semgrepTemplate.engine, 'semgrep');
+  assert.equal(semgrepTemplate.profileId, 'local.sast');
+
+  // Without PLATFORM_ENABLE_LOCAL_SAST=1, execution is blocked
+  const blocked = await platform.tools.invoke({
+    runId: run.id,
+    tool: 'scanner.run_template',
+    target: 'https://app.example.com',
+    method: 'GET',
+    riskLevel: 'R1',
+    args: { template: 'sast.semgrep.baseline' },
+  });
+  assert.equal(blocked.status, 'blocked');
+  assert.match(blocked.reason, /PLATFORM_ENABLE_LOCAL_SAST|external toolbox execution is disabled|toolbox profile is unavailable/i);
+});
+
+test('sast.semgrep.baseline requires an explicit SAST workspace and uses privacy-preserving Semgrep args', async () => {
+  const previousEnable = process.env.PLATFORM_ENABLE_LOCAL_SAST;
+  const previousWorkspace = process.env.PLATFORM_SAST_WORKSPACE;
+  const previousConfig = process.env.PLATFORM_SEMGREP_CONFIG;
+  const previousExternal = process.env.PLATFORM_ALLOW_EXTERNAL_TOOLBOX;
+  const previousAllowlist = process.env.PLATFORM_ALLOWED_SCANNER_TEMPLATES;
+  const workspace = join(tmpdir(), `agentred-local-sast-${Date.now()}`);
+  mkdirSync(workspace, { recursive: true });
+  try {
+    process.env.PLATFORM_ENABLE_LOCAL_SAST = '1';
+    process.env.PLATFORM_ALLOW_EXTERNAL_TOOLBOX = '1';
+    process.env.PLATFORM_ALLOWED_SCANNER_TEMPLATES = 'sast.semgrep.baseline';
+    delete process.env.PLATFORM_SAST_WORKSPACE;
+    const missingWorkspace = await createPlatform().toolbox.planTemplate({
+      templateId: 'sast.semgrep.baseline',
+      target: 'https://app.example.com',
+      riskLevel: 'R1',
+      timeoutMs: 10_000,
+    });
+    assert.equal(missingWorkspace.allowed, false);
+    assert.match(missingWorkspace.reason, /PLATFORM_SAST_WORKSPACE/i);
+
+    process.env.PLATFORM_SAST_WORKSPACE = workspace;
+    process.env.PLATFORM_SEMGREP_CONFIG = 'p/security-audit';
+    const planned = await createPlatform().toolbox.planTemplate({
+      templateId: 'sast.semgrep.baseline',
+      target: 'https://app.example.com',
+      riskLevel: 'R1',
+      timeoutMs: 10_000,
+    });
+    assert.ok(planned.plan);
+    assert.ok(planned.plan.args.includes('--metrics=off'));
+    assert.ok(planned.plan.args.includes('--disable-version-check'));
+    assert.ok(planned.plan.args.includes('--config'));
+    assert.deepEqual(planned.plan.args.slice(-2), ['p/security-audit', workspace]);
+    assert.ok(!planned.plan.args.includes(process.cwd()));
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+    if (previousEnable === undefined) delete process.env.PLATFORM_ENABLE_LOCAL_SAST;
+    else process.env.PLATFORM_ENABLE_LOCAL_SAST = previousEnable;
+    if (previousWorkspace === undefined) delete process.env.PLATFORM_SAST_WORKSPACE;
+    else process.env.PLATFORM_SAST_WORKSPACE = previousWorkspace;
+    if (previousConfig === undefined) delete process.env.PLATFORM_SEMGREP_CONFIG;
+    else process.env.PLATFORM_SEMGREP_CONFIG = previousConfig;
+    if (previousExternal === undefined) delete process.env.PLATFORM_ALLOW_EXTERNAL_TOOLBOX;
+    else process.env.PLATFORM_ALLOW_EXTERNAL_TOOLBOX = previousExternal;
+    if (previousAllowlist === undefined) delete process.env.PLATFORM_ALLOWED_SCANNER_TEMPLATES;
+    else process.env.PLATFORM_ALLOWED_SCANNER_TEMPLATES = previousAllowlist;
+  }
+});
+
 test('REST API imports Semgrep scanner results and includes them in the review bundle', async () => {
   const platform = createPlatform();
   const run = platform.graph.createRun({
@@ -2889,6 +3312,107 @@ test('REST API imports Semgrep scanner results and includes them in the review b
   } finally {
     await api.close();
   }
+});
+
+test('REST API accepts expanded scanner result engines such as httpx', async () => {
+  const platform = createPlatform();
+  const run = platform.graph.createRun({
+    target: 'https://app.example.com',
+    goal: 'Review httpx scanner adapter output',
+    scopePolicy: policy,
+    workerPool: [{ name: 'mock-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+  const api = await startApiServer(platform, { port: 0, authToken: 'test-token' });
+  const authHeaders = { authorization: 'Bearer test-token', 'content-type': 'application/json' };
+  try {
+    const response = await fetch(`${api.url}/runs/${run.id}/scanner-result-imports`, {
+      method: 'POST',
+      headers: authHeaders,
+      body: JSON.stringify({
+        source: 'httpx.jsonl',
+        engine: 'httpx',
+        createFindings: false,
+        content: JSON.stringify({ url: 'https://app.example.com', status_code: 200, title: 'App' }),
+      }),
+    });
+    assert.equal(response.status, 201);
+    const body = (await response.json()) as { importRecord: { engine: string; results: number; importedFindings: number } };
+    assert.equal(body.importRecord.engine, 'httpx');
+    assert.equal(body.importRecord.results, 1);
+    assert.equal(body.importRecord.importedFindings, 0);
+  } finally {
+    await api.close();
+  }
+});
+
+test('ToolGateway records a warning event when scanner auto-import parsing fails', async () => {
+  const platform = createPlatform();
+  const run = platform.graph.createRun({
+    target: 'https://app.example.com',
+    goal: 'Record scanner import parse failures',
+    scopePolicy: policy,
+    workerPool: [{ name: 'mock-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+  const now = new Date().toISOString();
+  const fakePlan = {
+    templateId: 'sast.semgrep.baseline',
+    profileId: 'local.sast',
+    engine: 'semgrep',
+    runner: 'local' as const,
+    command: 'semgrep',
+    args: ['scan', '--json'],
+    target: 'https://app.example.com',
+    riskLevel: 'R1' as const,
+    timeoutMs: 10_000,
+    cwdPolicy: 'ephemeral_tool_run_directory' as const,
+    networkPolicy: 'scope_checked_before_execution' as const,
+    evidencePolicy: 'stdout_stderr_redacted_command_output' as const,
+    approvalRequired: false,
+  };
+  const toolbox = platform.toolbox as unknown as {
+    planTemplate: typeof platform.toolbox.planTemplate;
+    executePlan: typeof platform.toolbox.executePlan;
+  };
+  toolbox.planTemplate = async () => ({
+    allowed: true,
+    profile: {
+      id: 'local.sast',
+      name: 'Local SAST',
+      kind: 'local',
+      status: 'available',
+      isolation: 'process',
+      description: 'Local SAST execution',
+      commands: ['semgrep'],
+      limitations: [],
+      available: true,
+      runtimeStatus: 'available',
+      runner: 'local'
+    },
+    template: { id: 'sast.semgrep.baseline', name: 'Semgrep', description: 'test', domain: 'sast', engine: 'semgrep', profileId: 'local.sast', executionMode: 'external', adapterStatus: 'available', defaultRiskLevel: 'R1', evidenceKind: 'command_output', riskNotes: [] },
+    plan: fakePlan,
+  });
+  toolbox.executePlan = async () => ({
+    command: 'semgrep',
+    args: ['scan', '--json'],
+    cwd: '.local/tool-runs/test',
+    stdout: 'not valid semgrep json',
+    stderr: '',
+    exitCode: 0,
+    timedOut: false,
+    startedAt: now,
+    endedAt: now,
+  });
+
+  const result = await platform.tools.invoke({
+    runId: run.id,
+    tool: 'scanner.run_template',
+    target: 'https://app.example.com',
+    method: 'GET',
+    riskLevel: 'R1',
+    args: { template: 'sast.semgrep.baseline' },
+  });
+  assert.equal(result.status, 'allowed');
+  assert.ok(platform.events.list(run.id).some((event) => event.type === 'scanner.result.import_failed' && /semgrep/.test(event.detail ?? '')));
 });
 
 test('scanner result import supports generic JSON without forced finding creation', () => {
@@ -3480,14 +4004,14 @@ test('web.nuclei.safe_templates adapterStatus is available and blocks when conta
     assert.equal(nucleiTemplate.engine, 'nuclei');
     assert.equal(nucleiTemplate.profileId, 'container.web-recon');
 
-    // Without PLATFORM_ENABLE_CONTAINER_TOOLBOX=1, execution is still blocked
+    // Without PLATFORM_ENABLE_CONTAINER_TOOLBOX=1 or allowlist, execution is still blocked
     const blocked = await platform.tools.invoke({
       runId: run.id, tool: 'scanner.run_template',
       target: `${target.url}/profile`, method: 'GET', riskLevel: 'R2',
       args: { template: 'web.nuclei.safe_templates' },
     });
     assert.equal(blocked.status, 'blocked');
-    assert.match(blocked.reason, /external toolbox execution is disabled|toolbox profile is unavailable|PLATFORM_ENABLE_CONTAINER_TOOLBOX/i);
+    assert.match(blocked.reason, /external toolbox execution is disabled|toolbox profile is unavailable|PLATFORM_ENABLE_CONTAINER_TOOLBOX|not allowlisted/i);
   } finally {
     await target.close();
   }
