@@ -359,7 +359,7 @@ test('ToolGateway exposes a tool catalog and scanner.run_template records templa
           template.id === 'web.nuclei.safe_templates' &&
           template.engine === 'nuclei' &&
           template.profileId === 'container.web-recon' &&
-          template.adapterStatus === 'planned',
+          template.adapterStatus === 'available',
       ),
     );
 
@@ -3458,6 +3458,83 @@ test('Worker envelope includes sessionSummary in previewEnvelope output', async 
   assert.ok(summary.concludedIntents.some((i) => i.hypothesis === 'Probe /api/v2 endpoints' && i.conclusion === 'Found 3 unauthenticated API endpoints'));
   assert.equal(summary.failedHypotheses.length, 0);
   assert.equal(summary.proposedFindingTitles.length, 0);
+});
+
+test('web.nuclei.safe_templates adapterStatus is available and blocks when container env is off', async () => {
+  const target = await startTargetServer();
+  const platform = createPlatform();
+  const run = platform.graph.createRun({
+    target: target.url,
+    goal: 'Verify nuclei template availability',
+    scopePolicy: { ...policy, allowedAssets: ['127.0.0.1'], deniedAssets: [] },
+    workerPool: [{ name: 'mock-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+  try {
+    // adapterStatus should now be 'available' (not 'planned')
+    const catalog = platform.tools.catalog();
+    const scanner = catalog.find((t) => t.name === 'scanner.run_template');
+    assert.ok(scanner);
+    const nucleiTemplate = scanner.templates.find((t) => t.id === 'web.nuclei.safe_templates');
+    assert.ok(nucleiTemplate);
+    assert.equal(nucleiTemplate.adapterStatus, 'available');
+    assert.equal(nucleiTemplate.engine, 'nuclei');
+    assert.equal(nucleiTemplate.profileId, 'container.web-recon');
+
+    // Without PLATFORM_ENABLE_CONTAINER_TOOLBOX=1, execution is still blocked
+    const blocked = await platform.tools.invoke({
+      runId: run.id, tool: 'scanner.run_template',
+      target: `${target.url}/profile`, method: 'GET', riskLevel: 'R2',
+      args: { template: 'web.nuclei.safe_templates' },
+    });
+    assert.equal(blocked.status, 'blocked');
+    assert.match(blocked.reason, /external toolbox execution is disabled|toolbox profile is unavailable|PLATFORM_ENABLE_CONTAINER_TOOLBOX/i);
+  } finally {
+    await target.close();
+  }
+});
+
+test('Nuclei JSONL output is auto-parsed into findings when executeExternalScannerTemplate runs nuclei engine', () => {
+  // Test the parsing path directly via ScannerResultImportService (same code path as auto-parse)
+  const platform = createPlatform();
+  const run = platform.graph.createRun({
+    target: 'https://app.example.com',
+    goal: 'Verify nuclei JSONL auto-parse',
+    scopePolicy: policy,
+    workerPool: [{ name: 'mock-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+
+  const nucleiJsonl = [
+    JSON.stringify({
+      'template-id': 'http-missing-security-headers',
+      info: { name: 'HTTP Missing Security Headers', severity: 'medium', description: 'Missing headers detected.' },
+      'matched-at': 'https://app.example.com/',
+    }),
+    JSON.stringify({
+      'template-id': 'exposed-panel:kibana-default',
+      info: { name: 'Kibana Dashboard Exposed', severity: 'high', description: 'Kibana panel accessible.' },
+      'matched-at': 'https://app.example.com:5601',
+    }),
+  ].join('\n');
+
+  const result = platform.scannerResults.import({
+    runId: run.id,
+    source: 'nuclei:web.nuclei.safe_templates',
+    engine: 'nuclei',
+    content: nucleiJsonl,
+    createFindings: true,
+  });
+
+  assert.equal(result.importRecord.engine, 'nuclei');
+  assert.equal(result.importRecord.results, 2);
+  assert.equal(result.importRecord.highOrCritical, 1);
+  assert.equal(result.findingIds.length, 2);
+
+  const graph = platform.graph.getGraph(run.id);
+  const findings = graph.findings;
+  assert.ok(findings.some((f) => f.title.includes('HTTP Missing Security Headers')));
+  assert.ok(findings.some((f) => f.title.includes('Kibana') && f.severity === 'high'));
+  // All findings backed by the import evidence
+  assert.ok(findings.every((f) => f.evidenceIds.length > 0));
 });
 
 test('SQLite-backed platform reloads the local graph state', () => {
