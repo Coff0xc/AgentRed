@@ -191,11 +191,8 @@ export class Dispatcher {
 
     if (openIntent) {
       const claimedIntent = this.graph.claimIntent(openIntent.id, worker.name, this.intentLeaseMs);
-      const result = await this.runWorker(
-        runId,
-        worker,
-        this.withWorkerContext(runId, { type: 'explore', graph: snapshot, intent: claimedIntent }),
-      ).catch(
+      const exploreTask = this.withWorkerContext(runId, { type: 'explore', graph: snapshot, intent: claimedIntent });
+      const result = await this.runWorker(runId, worker, exploreTask).catch(
         (error: unknown) => {
           const reason = error instanceof Error ? error.message : String(error);
           return { accepted: false as const, reason };
@@ -222,7 +219,7 @@ export class Dispatcher {
           { worker: worker.name, task: 'explore', intentId: claimedIntent.id, reason, ...dispatchSelectionAttributes(workerSelection) },
         );
       }
-      const explore = await this.applyExplore(runId, claimedIntent.id, claimedIntent.riskLevel, worker.name, result).catch((error: unknown) => ({
+      const explore = await this.applyExplore(runId, claimedIntent.id, claimedIntent.riskLevel, worker.name, result, worker, exploreTask).catch((error: unknown) => ({
         status: 'blocked' as const,
         reason: error instanceof Error ? error.message : String(error),
         approvalId: undefined,
@@ -516,33 +513,76 @@ export class Dispatcher {
     fallbackRiskLevel: WorkerToolRequest['riskLevel'],
     workerName: string,
     result: AcceptedWorkerTaskResult,
+    worker: WorkerAdapter,
+    task: Extract<Parameters<WorkerAdapter['execute']>[0], { type: 'explore' }>,
   ): Promise<
     | { status: 'concluded'; evidenceIds: string[] }
     | { status: 'blocked'; reason: string; approvalId?: string; invocationId?: string }
   > {
-    const description = result.data.description;
-    if (!description) {
-      throw new Error('Worker returned no explore conclusion');
-    }
-    const evidenceIds: string[] = [];
-    for (const request of result.data.toolRequests ?? []) {
-      const resolvedRequest = resolveProducedEvidenceReference(request, evidenceIds);
-      const toolResult = await this.invokeWorkerTool(runId, intentId, fallbackRiskLevel, workerName, resolvedRequest);
-      if (toolResult.status === 'allowed') {
-        if (toolResult.evidenceId) {
-          evidenceIds.push(toolResult.evidenceId);
+    const maxRounds = 4;
+    let currentResult = result;
+    const allEvidenceIds: string[] = [];
+
+    for (let round = 0; round < maxRounds; round++) {
+      const description = currentResult.data.description;
+      if (!description) {
+        throw new Error('Worker returned no explore conclusion');
+      }
+
+      const roundEvidenceIds: string[] = [];
+      for (const request of currentResult.data.toolRequests ?? []) {
+        const resolvedRequest = resolveProducedEvidenceReference(request, [...allEvidenceIds, ...roundEvidenceIds]);
+        const toolResult = await this.invokeWorkerTool(runId, intentId, fallbackRiskLevel, workerName, resolvedRequest);
+        if (toolResult.status === 'allowed') {
+          if (toolResult.evidenceId) {
+            roundEvidenceIds.push(toolResult.evidenceId);
+          }
+          continue;
         }
+        return {
+          status: 'blocked',
+          reason: toolResult.reason,
+          approvalId: toolResult.approvalId,
+          invocationId: toolResult.invocationId,
+        };
+      }
+      allEvidenceIds.push(...roundEvidenceIds);
+
+      if (currentResult.data.continueExplore === true) {
+        if (round >= maxRounds - 1) {
+          return {
+            status: 'blocked',
+            reason: `Max explore rounds reached (${maxRounds}) while worker still requested continueExplore`,
+          };
+        }
+
+        const latestGraph = this.graph.getGraph(runId);
+        const latestIntent = latestGraph.intents.find((item) => item.id === intentId) ?? task.intent;
+        const continueTask = this.withWorkerContext(runId, {
+          type: 'explore',
+          graph: latestGraph,
+          intent: latestIntent,
+          producedEvidenceIds: [...allEvidenceIds],
+        });
+        const nextResult = await this.runWorker(runId, worker, continueTask).catch((error: unknown) => ({
+          accepted: false as const,
+          reason: error instanceof Error ? error.message : String(error),
+        }));
+        if (!nextResult.accepted) {
+          return { status: 'blocked', reason: nextResult.reason };
+        }
+        if (!nextResult.data.description) {
+          return { status: 'blocked', reason: 'Worker returned no explore conclusion on continue' };
+        }
+        currentResult = nextResult;
         continue;
       }
-      return {
-        status: 'blocked',
-        reason: toolResult.reason,
-        approvalId: toolResult.approvalId,
-        invocationId: toolResult.invocationId,
-      };
+
+      this.graph.concludeIntent(intentId, description, `${workerName}:explore`, allEvidenceIds);
+      return { status: 'concluded', evidenceIds: allEvidenceIds };
     }
-    this.graph.concludeIntent(intentId, description, `${workerName}:explore`, evidenceIds);
-    return { status: 'concluded', evidenceIds };
+
+    return { status: 'blocked', reason: `Max explore rounds reached (${maxRounds})` };
   }
 
   private async invokeWorkerTool(
