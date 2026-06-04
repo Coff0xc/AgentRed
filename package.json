@@ -17,6 +17,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "tsx --test tests/*.test.ts",
+    "test:integration": "tsx --test tests/*.integration.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "dev": "tsx src/index.ts"
   },
