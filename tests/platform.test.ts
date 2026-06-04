@@ -14,6 +14,7 @@ import { createPlatform } from '../src/platform.js';
 import { evaluateScope } from '../src/scope/policy.js';
 import type { ScopePolicy } from '../src/domain/types.js';
 import { CliWorkerAdapter } from '../src/workers/cli-worker.js';
+import { buildSessionSummary } from '../src/workers/protocol.js';
 import type { WorkerAdapter, WorkerTask, WorkerTaskResult } from '../src/workers/types.js';
 
 const policy: ScopePolicy = {
@@ -3156,6 +3157,308 @@ function requestViaHttpProxy(
     request.end();
   });
 }
+
+test('Dispatcher supports multi-round explore: worker requests continueExplore and receives producedEvidenceIds on next round', async () => {
+  const target = await startTargetServer();
+  const platform = createPlatform();
+  const run = platform.graph.createRun({
+    target: target.url,
+    goal: 'Probe parameter reflection across two rounds',
+    scopePolicy: { ...policy, allowedAssets: ['127.0.0.1'], deniedAssets: [] },
+    workerPool: [{ name: 'multi-round-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+  const originFact = platform.graph.getGraph(run.id).facts[0];
+  assert.ok(originFact);
+  platform.graph.createIntent({
+    runId: run.id,
+    fromFactIds: [originFact.id],
+    hypothesis: 'Probe parameter reflection in two rounds',
+    riskLevel: 'R1',
+    createdBy: 'test',
+  });
+
+  const roundsObserved: number[] = [];
+  const producedIdsSeenInRound2: string[] = [];
+  const graphEvidenceIdsSeenInRound2: string[] = [];
+
+  const dispatcher = new Dispatcher(platform.graph, {
+    events: platform.events,
+    observability: platform.observability,
+    tools: platform.tools,
+    workerFactory: () =>
+      new StaticWorker('multi-round-worker', async (task) => {
+        if (task.type !== 'explore') return { accepted: false, reason: 'unexpected task type' };
+
+        if (!task.producedEvidenceIds || task.producedEvidenceIds.length === 0) {
+          // Round 1: capture baseline, ask for another round
+          roundsObserved.push(1);
+          return {
+            accepted: true,
+            data: {
+              description: 'Round 1: captured baseline, continuing to probe.',
+              continueExplore: true,
+              toolRequests: [
+                { tool: 'http.request', target: `${target.url}/profile`, method: 'GET', riskLevel: 'R1', args: {} },
+              ],
+            },
+          };
+        }
+
+        // Round 2: received evidence from round 1
+        roundsObserved.push(2);
+        producedIdsSeenInRound2.push(...task.producedEvidenceIds);
+        graphEvidenceIdsSeenInRound2.push(...task.graph.evidence.map((e) => e.id));
+        return {
+          accepted: true,
+          data: {
+            description: 'Round 2: confirmed reflection signal from baseline evidence.',
+            toolRequests: [
+              {
+                tool: 'http.request',
+                target: `${target.url}/profile`,
+                method: 'GET',
+                riskLevel: 'R1',
+                args: {},
+              },
+            ],
+          },
+        };
+      }),
+  });
+
+  try {
+    const result = await dispatcher.dispatchOnce(run.id);
+    assert.equal(result.status, 'dispatched');
+
+    // Two worker invocations occurred
+    assert.deepEqual(roundsObserved, [1, 2]);
+
+    // Round 2 received the evidence ID produced in round 1
+    assert.equal(producedIdsSeenInRound2.length, 1);
+    const graph = platform.graph.getGraph(run.id);
+    assert.ok(graph.evidence.some((e) => e.id === producedIdsSeenInRound2[0]));
+    assert.ok(graphEvidenceIdsSeenInRound2.includes(producedIdsSeenInRound2[0]));
+
+    // Intent was concluded with evidence from both rounds
+    const concluded = graph.intents.find((i) => i.status === 'concluded');
+    assert.ok(concluded);
+    assert.equal(graph.evidence.length, 2);
+  } finally {
+    await target.close();
+  }
+});
+
+test('Dispatcher caps multi-round explore at 4 rounds and releases stuck intents', async () => {
+  const target = await startTargetServer();
+  const platform = createPlatform();
+  const run = platform.graph.createRun({
+    target: target.url,
+    goal: 'Cap runaway multi-round explore',
+    scopePolicy: { ...policy, allowedAssets: ['127.0.0.1'], deniedAssets: [] },
+    workerPool: [{ name: 'runaway-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+  const originFact = platform.graph.getGraph(run.id).facts[0];
+  assert.ok(originFact);
+  const intent = platform.graph.createIntent({
+    runId: run.id,
+    fromFactIds: [originFact.id],
+    hypothesis: 'Worker always asks for another round',
+    riskLevel: 'R1',
+    createdBy: 'test',
+  });
+
+  let invocations = 0;
+  const dispatcher = new Dispatcher(platform.graph, {
+    events: platform.events,
+    observability: platform.observability,
+    tools: platform.tools,
+    workerFactory: () =>
+      new StaticWorker('runaway-worker', async (task) => {
+        if (task.type !== 'explore') return { accepted: false, reason: 'unexpected task type' };
+        invocations++;
+        return {
+          accepted: true,
+          data: {
+            description: `Round ${invocations} — always wants more.`,
+            continueExplore: true,
+            toolRequests: [
+              { tool: 'http.request', target: `${target.url}/profile`, method: 'GET', riskLevel: 'R1', args: {} },
+            ],
+          },
+        };
+      }),
+  });
+
+  try {
+    const result = await dispatcher.dispatchOnce(run.id);
+    assert.equal(result.status, 'blocked');
+    assert.match(result.status === 'blocked' ? result.reason : '', /Max explore rounds reached/);
+
+    // Hard cap: at most 4 worker invocations (rounds 0–3)
+    assert.ok(invocations <= 4, `Expected ≤4 invocations, got ${invocations}`);
+
+    const graph = platform.graph.getGraph(run.id);
+    const released = graph.intents.find((i) => i.id === intent.id);
+    assert.equal(released?.status, 'released');
+    assert.match(released?.releaseReason ?? '', /Max explore rounds reached/);
+    assert.equal(graph.intents.some((i) => i.status === 'concluded'), false);
+  } finally {
+    await target.close();
+  }
+});
+
+test('strategy currentPhase transitions through recon → surface_map → vuln_probe → report as run state advances', async () => {
+  const target = await startTargetServer();
+  const platform = createPlatform();
+  const run = platform.graph.createRun({
+    target: target.url,
+    goal: 'Verify phase transitions',
+    scopePolicy: { ...policy, allowedAssets: ['127.0.0.1'], deniedAssets: [] },
+    workerPool: [{ name: 'mock-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+
+  try {
+    // Phase 1: no evidence yet
+    assert.equal(platform.strategy.getBrief(run.id).currentPhase, 'recon');
+    const reconRecs = platform.strategy.getBrief(run.id).recommendations;
+    assert.ok(reconRecs.every((r) => !r.phase || r.phase === 'recon'));
+
+    // Add evidence → surface_map
+    const ev = await platform.tools.invoke({ runId: run.id, tool: 'http.request', target: `${target.url}/profile`, method: 'GET', riskLevel: 'R1', args: {} });
+    assert.equal(ev.status, 'allowed');
+    assert.ok(ev.evidenceId);
+    assert.equal(platform.strategy.getBrief(run.id).currentPhase, 'surface_map');
+    // surface_map recommendations should not include recon-only items
+    const surfaceRecs = platform.strategy.getBrief(run.id).recommendations;
+    assert.ok(surfaceRecs.some((r) => r.phase === 'surface_map'));
+    assert.ok(!surfaceRecs.some((r) => r.phase === 'recon'));
+
+    // Propose a candidate finding → vuln_probe
+    const finding = platform.findings.proposeFinding({ runId: run.id, title: 'Candidate', severity: 'medium', confidence: 'likely', affectedAssets: [target.url], evidenceIds: [ev.evidenceId], reproSteps: ['replay'], impact: 'TBD', remediation: 'TBD' });
+    assert.equal(platform.strategy.getBrief(run.id).currentPhase, 'vuln_probe');
+
+    // Confirm the finding → report
+    platform.evidenceReviews.review({ evidenceId: ev.evidenceId, status: 'useful', reviewer: 'test' });
+    platform.findings.updateValidationState(finding.id, 'confirmed');
+    assert.equal(platform.strategy.getBrief(run.id).currentPhase, 'report');
+    const reportRecs = platform.strategy.getBrief(run.id).recommendations;
+    assert.ok(reportRecs.some((r) => r.id === 'report.generate' && r.phase === 'report'));
+  } finally {
+    await target.close();
+  }
+});
+
+test('Autopilot only picks phase-matching recommendations and stops at operator_review_required when no phase match exists', async () => {
+  const target = await startTargetServer();
+  const platform = createPlatform();
+  const run = platform.graph.createRun({
+    target: target.url,
+    goal: 'Verify autopilot phase gating',
+    scopePolicy: { ...policy, allowedAssets: ['127.0.0.1'], deniedAssets: [] },
+    workerPool: [{ name: 'mock-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+  platform.pocs.enable(run.id, 'web.rce-deserialization-triage');
+
+  try {
+    // In recon phase: autopilot should pick a recon toolRequest (baseline http)
+    const tick1 = await platform.autopilot.tick(run.id);
+    assert.equal(tick1.status, 'queued_and_dispatched');
+    assert.equal(tick1.recommendationId, 'web.baseline_http');
+    assert.equal(platform.strategy.getBrief(run.id).currentPhase, 'recon');
+
+    // Inject surface_map-phase evidence directly to skip to that phase
+    const ev = await platform.tools.invoke({ runId: run.id, tool: 'http.request', target: `${target.url}/profile`, method: 'GET', riskLevel: 'R1', args: {} });
+    assert.equal(ev.status, 'allowed');
+    assert.ok(ev.evidenceId);
+    assert.equal(platform.strategy.getBrief(run.id).currentPhase, 'surface_map');
+
+    // Autopilot should now pick a surface_map recommendation, not a recon one
+    const tick2 = await platform.autopilot.tick(run.id);
+    if (tick2.status === 'queued_and_dispatched') {
+      assert.ok(tick2.recommendationTitle);
+      // The brief's currentPhase should still be surface_map
+      assert.equal(platform.strategy.getBrief(run.id).currentPhase, 'surface_map');
+    } else {
+      assert.ok(['skipped', 'waiting_worker', 'waiting_approval', 'operator_review_required', 'dispatched'].includes(tick2.status));
+    }
+  } finally {
+    await target.close();
+  }
+});
+
+test('buildSessionSummary derives confirmed facts, concluded intents, failed hypotheses, findings, and evidence counts from the graph', async () => {
+  const target = await startTargetServer();
+  const platform = createPlatform();
+  const run = platform.graph.createRun({
+    target: target.url,
+    goal: 'Verify session summary content',
+    scopePolicy: { ...policy, allowedAssets: ['127.0.0.1'], deniedAssets: [] },
+    workerPool: [{ name: 'mock-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+
+  try {
+    // Add a non-system fact
+    const fact = platform.graph.addFact({ runId: run.id, statement: 'Login endpoint found at /login', evidenceIds: [], createdBy: 'worker:bootstrap' });
+
+    // Create and conclude an intent
+    const intent = platform.graph.createIntent({ runId: run.id, fromFactIds: [fact.id], hypothesis: 'Check /login for password exposure', riskLevel: 'R1', createdBy: 'worker:reason' });
+    platform.graph.concludeIntent(intent.id, 'No password visible in /login response', 'worker:explore');
+
+    // Create a released (failed) intent
+    const failedIntent = platform.graph.createIntent({ runId: run.id, fromFactIds: [fact.id], hypothesis: 'Check /admin for unauthenticated access', riskLevel: 'R2', createdBy: 'worker:reason' });
+    platform.graph.claimIntent(failedIntent.id, 'mock-worker', 60_000);
+    platform.graph.releaseIntent(failedIntent.id, 'Admin endpoint returned 403, not exploitable');
+
+    // Add evidence
+    const evidence = await platform.tools.invoke({ runId: run.id, tool: 'http.request', target: `${target.url}/profile`, method: 'GET', riskLevel: 'R1', args: {} });
+    assert.equal(evidence.status, 'allowed');
+    assert.ok(evidence.evidenceId);
+
+    // Propose a finding
+    platform.findings.proposeFinding({ runId: run.id, title: 'Profile endpoint exposed', severity: 'medium', confidence: 'likely', affectedAssets: [target.url], evidenceIds: [evidence.evidenceId], reproSteps: ['GET /profile'], impact: 'data exposure', remediation: 'add auth' });
+
+    const graph = platform.graph.getGraph(run.id);
+    const summary = buildSessionSummary({ type: 'bootstrap', graph });
+
+    // confirmedFacts: only non-system facts
+    assert.ok(summary.confirmedFacts.some((f) => f === 'Login endpoint found at /login'));
+    // concludedIntents: hypothesis + conclusion from the linked fact
+    assert.ok(summary.concludedIntents.some((i) => i.hypothesis === 'Check /login for password exposure' && i.conclusion === 'No password visible in /login response'));
+    // failedHypotheses: release reason of released intents
+    assert.ok(summary.failedHypotheses.some((h) => h === 'Admin endpoint returned 403, not exploitable'));
+    // proposedFindingTitles
+    assert.ok(summary.proposedFindingTitles.includes('Profile endpoint exposed'));
+    // evidenceKindCounts: replay_bundle excluded
+    assert.equal(summary.evidenceKindCounts['http_exchange'], 1);
+    assert.equal(summary.evidenceKindCounts['replay_bundle'], undefined);
+  } finally {
+    await target.close();
+  }
+});
+
+test('Worker envelope includes sessionSummary in previewEnvelope output', async () => {
+  const platform = createPlatform();
+  const run = platform.graph.createRun({
+    target: 'https://app.example.com',
+    goal: 'Verify envelope contains sessionSummary',
+    scopePolicy: policy,
+    workerPool: [{ name: 'mock-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+
+  // Add state so the summary is non-trivial
+  const fact = platform.graph.addFact({ runId: run.id, statement: 'Discovered /api/v2', evidenceIds: [], createdBy: 'worker:bootstrap' });
+  const intent = platform.graph.createIntent({ runId: run.id, fromFactIds: [fact.id], hypothesis: 'Probe /api/v2 endpoints', riskLevel: 'R1', createdBy: 'worker:reason' });
+  platform.graph.concludeIntent(intent.id, 'Found 3 unauthenticated API endpoints', 'worker:explore');
+
+  const preview = await platform.dispatcher.previewEnvelope(run.id, 'reason');
+  const summary = preview.envelope.sessionSummary;
+
+  assert.ok(summary);
+  assert.ok(summary.confirmedFacts.some((f) => f === 'Discovered /api/v2'));
+  assert.ok(summary.concludedIntents.some((i) => i.hypothesis === 'Probe /api/v2 endpoints' && i.conclusion === 'Found 3 unauthenticated API endpoints'));
+  assert.equal(summary.failedHypotheses.length, 0);
+  assert.equal(summary.proposedFindingTitles.length, 0);
+});
 
 test('SQLite-backed platform reloads the local graph state', () => {
   const dir = join(tmpdir(), `ai-pentest-platform-${Date.now()}`);
