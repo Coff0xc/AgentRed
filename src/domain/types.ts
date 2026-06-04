@@ -843,10 +843,12 @@ export interface BrowserSession {
   id: string;
   runId: string;
   status: BrowserSessionStatus;
-  mode: 'local_fetch_controller' | 'external_browser';
+  mode: 'local_fetch_controller' | 'playwright_controller' | 'external_browser';
   currentUrl?: string;
   userAgent: string;
   limitations: string[];
+  snapshotIds?: string[];
+  lastSnapshotId?: string;
   createdAt: string;
   lastNavigatedAt?: string;
   closedAt?: string;

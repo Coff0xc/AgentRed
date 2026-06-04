@@ -4,7 +4,11 @@ import { AgentHarnessService } from './agents/agent-harness-service.js';
 import { AgentWorkbenchService } from './agents/agent-workbench-service.js';
 import { AccessReviewService } from './access/access-review-service.js';
 import { ApprovalService } from './approvals/approval-service.js';
-import { BrowserSessionService } from './captures/browser-session-service.js';
+import {
+  BrowserSessionService,
+  createPlaywrightRuntimeFromEnv,
+  type BrowserAutomationRuntime,
+} from './captures/browser-session-service.js';
 import { ProxySessionService } from './captures/proxy-session-service.js';
 import { CloudIamImportService } from './cloud/cloud-iam-import-service.js';
 import { ConnectorRunService } from './connectors/connector-run-service.js';
@@ -122,7 +126,12 @@ export interface Platform {
   agentWorkbench: AgentWorkbenchService;
 }
 
-export function createPlatform(options: { databasePath?: string } = {}): Platform {
+export interface CreatePlatformOptions {
+  databasePath?: string;
+  browserRuntime?: BrowserAutomationRuntime;
+}
+
+export function createPlatform(options: CreatePlatformOptions = {}): Platform {
   const store = options.databasePath ? new SqlitePlatformStore(options.databasePath) : new InMemoryPlatformStore();
   const events = new RunEventService(store);
   const graph = new GraphServer(store, events);
@@ -138,7 +147,12 @@ export function createPlatform(options: { databasePath?: string } = {}): Platfor
   const evidence = new EvidenceEngine(store, events);
   const replay = new EvidenceReplayService(store, evidence);
   const evidenceReviews = new EvidenceReviewService(store, events);
-  const browserSessions = new BrowserSessionService(store, evidence, events);
+  const browserSessions = new BrowserSessionService(
+    store,
+    evidence,
+    events,
+    options.browserRuntime ?? createPlaywrightRuntimeFromEnv(),
+  );
   const proxySessions = new ProxySessionService(store, events);
   const oast = new OastService(store, evidence, events);
   const credentials = new CredentialReferenceService(store, events);

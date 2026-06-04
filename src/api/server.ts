@@ -1186,7 +1186,7 @@ async function route(
 
   if (method === 'POST' && pathParts[0] === 'browser-sessions' && pathParts[2] === 'close') {
     try {
-      sendJson(response, 200, platform.browserSessions.close(pathParts[1]));
+      sendJson(response, 200, await platform.browserSessions.close(pathParts[1]));
     } catch (error) {
       throw new HttpError(404, error instanceof Error ? error.message : 'Browser session not found');
     }

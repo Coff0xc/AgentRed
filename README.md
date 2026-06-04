@@ -72,6 +72,7 @@ AgentRed 现在围绕这些目标建设。
 | 调度 | Bootstrap、Reason、Explore 多轮循环、intent lease、heartbeat、超时释放、循环上限监督 |
 | 安全门禁 | `ScopePolicy`、allowlist、denylist、HTTP 方法限制、R0-R4 风险等级、审批、速率限制 |
 | 主动探测 | `web.param_probe`、认证端点发现、API 版本发现、Host header probe、基础 HTTP 探测 |
+| 本地 Runner | `browser.navigate` 默认 fetch controller，可选 Playwright controller，scope 阻断、截图 raw-local-only、DOM/console/network 脱敏入证据 |
 | 外部扫描器 | typed scanner template、nuclei safe template 可用性、nuclei JSONL 自动导入 finding |
 | 证据中心 | 本地 evidence blob、SHA-256、脱敏状态、复核状态、evidence content API |
 | 访问控制测试 | credential reference、placeholder 使用、跨角色 evidence compare |
@@ -92,7 +93,7 @@ AgentRed 当前是平台内核，不是已经完整商品化的 SaaS 或桌面�
 还在路线图里的能力包括：
 
 - 真正完整的桌面端产品体验
-- 真实浏览器自动化和本地代理 Runner 的生产级闭环
+- 桌面端真实浏览器、本地代理、TLS MITM 和证据回放的一体化产品闭环
 - TLS MITM proxy 和本地 CA 生命周期
 - Docker/Podman 外部 toolbox 默认可用配置
 - 更多 typed adapter：nmap、httpx、ffuf、sqlmap、semgrep、Burp、ZAP
@@ -158,6 +159,34 @@ http://127.0.0.1:4317/app
 - 服务不会自己生成 token。
 - `/` 和 `/health` 不需要认证。
 - 其他 API 需要 `Authorization: Bearer <token>` 或 `X-Platform-Token: <token>`。
+
+### 5.5 可选：启用 Playwright 本地浏览器 Runner
+
+默认安装不强制拉取浏览器二进制。需要 JavaScript/DOM 渲染、截图和浏览器网络事件时，再单独安装并显式开启：
+
+```bash
+npm install --no-save playwright
+npx playwright install chromium
+PLATFORM_API_TOKEN=local-dev-token PLATFORM_ENABLE_PLAYWRIGHT_RUNNER=1 npm run dev
+```
+
+PowerShell：
+
+```powershell
+npm install --no-save playwright
+npx playwright install chromium
+$env:PLATFORM_API_TOKEN = "local-dev-token"
+$env:PLATFORM_ENABLE_PLAYWRIGHT_RUNNER = "1"
+npm run dev
+```
+
+启用后，`browser.navigate` 会使用 `playwright_controller`：
+
+- 初始目标、最终 URL 和浏览器发起的子请求仍然走 `ScopePolicy`。
+- 越界跳转会被记录为 blocked，不会落截图或页面证据。
+- 截图证据是 `raw_local_only`，不会被当作云安全证据。
+- DOM 文本、console、network 摘要会脱敏后写入 evidence。
+- TLS MITM、本地 CA、视频/trace 生命周期仍属于桌面 Runner 路线图。
 
 ---
 

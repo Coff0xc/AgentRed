@@ -486,6 +486,46 @@ export class ToolGateway {
       return this.recordOastCallback(input, startedMs);
     }
 
+    if (input.tool === 'browser.navigate') {
+      if (!this.browserSessions) {
+        const blocked = this.recordInvocation(input, 'blocked', 'Browser session service is not configured', input.approvalId);
+        return this.finishTool(
+          input,
+          { status: 'blocked', invocationId: blocked.id, reason: blocked.reason ?? 'Browser session service is not configured' },
+          startedMs,
+          { reason: blocked.reason },
+        );
+      }
+      try {
+        const result = await this.browserSessions.navigate({
+          runId: input.runId,
+          sessionId: typeof input.args.sessionId === 'string' ? input.args.sessionId : undefined,
+          target: input.target,
+          method: input.method,
+          headers: parseHeaders(input.args.headers),
+          timeoutMs: typeof input.args.timeoutMs === 'number' ? input.args.timeoutMs : undefined,
+          riskLevel: input.riskLevel,
+        });
+        const invocation = this.recordInvocation(input, 'allowed', undefined, input.approvalId, `stdout://${newId('tool')}`);
+        this.completeInvocation(invocation.id);
+        return this.finishTool(
+          input,
+          {
+            status: 'allowed',
+            invocationId: invocation.id,
+            stdoutRef: invocation.stdoutRef ?? '',
+            evidenceId: result.evidence.id,
+          },
+          startedMs,
+          { evidenceId: result.evidence.id, browserSessionId: result.session.id },
+        );
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : 'Browser navigation failed';
+        const blocked = this.recordInvocation(input, 'blocked', reason, input.approvalId);
+        return this.finishTool(input, { status: 'blocked', invocationId: blocked.id, reason }, startedMs, { reason });
+      }
+    }
+
     const invocation = this.recordInvocation(input, 'allowed', undefined, input.approvalId, `stdout://${newId('tool')}`);
     if (input.tool === 'http.request') {
       const evidence = await this.executeHttpRequest(input, invocation.id);
@@ -512,38 +552,6 @@ export class ToolGateway {
         },
         startedMs,
         { evidenceId: result.evidenceId, exitCode: result.exitCode ?? undefined, timedOut: result.timedOut },
-      );
-    }
-    if (input.tool === 'browser.navigate') {
-      if (!this.browserSessions) {
-        const blocked = this.recordInvocation(input, 'blocked', 'Browser session service is not configured', input.approvalId);
-        return this.finishTool(
-          input,
-          { status: 'blocked', invocationId: blocked.id, reason: blocked.reason ?? 'Browser session service is not configured' },
-          startedMs,
-          { reason: blocked.reason },
-        );
-      }
-      const result = await this.browserSessions.navigate({
-        runId: input.runId,
-        sessionId: typeof input.args.sessionId === 'string' ? input.args.sessionId : undefined,
-        target: input.target,
-        method: input.method,
-        headers: parseHeaders(input.args.headers),
-        timeoutMs: typeof input.args.timeoutMs === 'number' ? input.args.timeoutMs : undefined,
-        riskLevel: input.riskLevel,
-      });
-      this.completeInvocation(invocation.id);
-      return this.finishTool(
-        input,
-        {
-          status: 'allowed',
-          invocationId: invocation.id,
-          stdoutRef: invocation.stdoutRef ?? '',
-          evidenceId: result.evidence.id,
-        },
-        startedMs,
-        { evidenceId: result.evidence.id, browserSessionId: result.session.id },
       );
     }
     if (input.tool === 'scanner.run_template' && scannerRequest) {

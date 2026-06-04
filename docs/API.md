@@ -2517,7 +2517,7 @@ Lists persisted page snapshot records for the run, newest first. The same record
 
 ## Browser Sessions
 
-Browser sessions are the local browser-controller contract for the current Web Console and a future Tauri/Playwright/MITM desktop shell. The current implementation is `local_fetch_controller`: it captures navigation as an in-scope HTTP exchange, but does not execute JavaScript, manage a real DOM, or install a TLS interception certificate yet.
+Browser sessions are the local browser-controller contract for the current Web Console and a future Tauri/Playwright/MITM desktop shell. The default implementation is `local_fetch_controller`: it captures navigation as an in-scope HTTP exchange without JavaScript execution. When Playwright is installed locally and `PLATFORM_ENABLE_PLAYWRIGHT_RUNNER=1` is set, the same API uses `playwright_controller` for JavaScript execution, rendered screenshots, visible text, console summaries, and network summaries. TLS interception and local CA management are still separate desktop Runner capabilities.
 
 ```http
 POST /runs/{id}/browser-sessions
@@ -2537,7 +2537,7 @@ POST /browser-sessions/{id}/close
 }
 ```
 
-Navigation is scope-checked as an `R1` browser action and stores a redacted `http_exchange` evidence item.
+Navigation is scope-checked as an `R1` browser action and stores a redacted `http_exchange` evidence item. In `playwright_controller` mode, renderer subrequests are blocked when they fall outside `ScopePolicy`, the final URL is checked before evidence is stored, screenshots are stored as `raw_local_only`, and DOM/console/network summaries are redacted before persistence.
 
 The same capability is available through the Tool Gateway as `browser.navigate`:
 

@@ -15,6 +15,10 @@ import { evaluateScope } from '../src/scope/policy.js';
 import type { ScopePolicy } from '../src/domain/types.js';
 import { CliWorkerAdapter } from '../src/workers/cli-worker.js';
 import { buildSessionSummary } from '../src/workers/protocol.js';
+import type {
+  BrowserAutomationNavigation,
+  BrowserAutomationRuntime,
+} from '../src/captures/browser-session-service.js';
 import type { WorkerAdapter, WorkerTask, WorkerTaskResult } from '../src/workers/types.js';
 
 const policy: ScopePolicy = {
@@ -25,6 +29,55 @@ const policy: ScopePolicy = {
   credentialRules: { allowVaultReferencesOnly: true },
   rateLimits: { requestsPerMinute: 120 },
 };
+
+class FakeBrowserRuntime implements BrowserAutomationRuntime {
+  readonly mode = 'playwright_controller' as const;
+  public readonly closedSessions: string[] = [];
+  public readonly navigations: Array<{
+    target: string;
+    method: string;
+    headers: Record<string, string>;
+    allowInScope: boolean;
+    allowOutOfScope: boolean;
+  }> = [];
+
+  constructor(private readonly override?: (input: Parameters<BrowserAutomationRuntime['navigate']>[0]) => BrowserAutomationNavigation) {}
+
+  async navigate(input: Parameters<BrowserAutomationRuntime['navigate']>[0]): Promise<BrowserAutomationNavigation> {
+    const allowInScope = input.allowRequest(input.target, input.method);
+    const allowOutOfScope = input.allowRequest('https://evil.test/track?token=third-party-secret', 'GET');
+    this.navigations.push({
+      target: input.target,
+      method: input.method,
+      headers: input.headers,
+      allowInScope,
+      allowOutOfScope,
+    });
+    if (this.override) {
+      return this.override(input);
+    }
+    return {
+      finalUrl: input.target,
+      title: 'Rendered App token=title-secret',
+      status: 200,
+      statusText: 'OK',
+      responseHeaders: { 'content-type': 'text/html', 'set-cookie': 'session=runtime-secret' },
+      bodyPreview: 'Hello access_token=runtime-secret',
+      screenshot: Buffer.from('fake-png-bytes'),
+      screenshotContentType: 'image/png',
+      textPreview: 'Dashboard secret=runtime-secret',
+      consoleMessages: [{ type: 'log', text: 'token=console-secret' }],
+      networkEvents: [
+        { url: input.target, method: input.method, status: 200, resourceType: 'document' },
+        { url: 'https://evil.test/track?token=third-party-secret', method: 'GET', resourceType: 'script' },
+      ],
+    };
+  }
+
+  async closeSession(sessionId: string): Promise<void> {
+    this.closedSessions.push(sessionId);
+  }
+}
 
 test('ScopePolicy allows in-scope traffic and blocks denied, out-of-scope, R3, and R4 actions', () => {
   assert.equal(evaluateScope(policy, 'https://api.example.com/v1/users', 'GET', 'R1').action, 'allow');
@@ -2258,6 +2311,118 @@ test('REST API manages proxy capture sessions for desktop runner handoff', async
   } finally {
     await api.close();
   }
+});
+
+test('Playwright browser runner captures governed rendered evidence and closes runtime sessions', async () => {
+  const browserRuntime = new FakeBrowserRuntime();
+  const platform = createPlatform({ browserRuntime });
+  const run = platform.graph.createRun({
+    target: 'https://app.example.com',
+    goal: 'Capture rendered browser proof through governed runner',
+    scopePolicy: policy,
+    workerPool: [{ name: 'mock-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+  const session = platform.browserSessions.start({ runId: run.id, startUrl: 'https://app.example.com' });
+
+  const result = await platform.tools.invoke({
+    runId: run.id,
+    tool: 'browser.navigate',
+    target: 'https://app.example.com/app?token=raw-secret',
+    method: 'GET',
+    riskLevel: 'R1',
+    args: {
+      sessionId: session.id,
+      headers: { authorization: 'Bearer nav-secret', 'x-safe-marker': 'runner-test' },
+    },
+  });
+
+  assert.equal(result.status, 'allowed');
+  assert.ok(result.evidenceId);
+  assert.equal(browserRuntime.navigations.length, 1);
+  assert.equal(browserRuntime.navigations[0]?.allowInScope, true);
+  assert.equal(browserRuntime.navigations[0]?.allowOutOfScope, false);
+  assert.equal(browserRuntime.navigations[0]?.headers.authorization, 'Bearer nav-secret');
+
+  const updatedSession = platform.store.state.browserSessions[session.id];
+  assert.equal(updatedSession.mode, 'playwright_controller');
+  assert.equal(updatedSession.lastSnapshotId, updatedSession.snapshotIds?.[0]);
+  assert.match(updatedSession.currentUrl ?? '', /redacted/i);
+  assert.ok(!updatedSession.currentUrl?.includes('raw-secret'));
+
+  const graph = platform.graph.getGraph(run.id);
+  const snapshots = Object.values(platform.store.state.browserSnapshots).filter((item) => item.runId === run.id);
+  assert.equal(snapshots.length, 1);
+  assert.equal(snapshots[0]?.id, updatedSession.lastSnapshotId);
+  assert.equal(snapshots[0]?.source, 'browser');
+  assert.ok(snapshots[0]?.screenshotEvidenceId);
+  assert.ok(snapshots[0]?.textEvidenceId);
+  assert.equal(snapshots[0]?.screenshotContentType, 'image/png');
+
+  const screenshotEvidence = graph.evidence.find((item) => item.id === snapshots[0]?.screenshotEvidenceId);
+  assert.equal(screenshotEvidence?.kind, 'screenshot');
+  assert.equal(screenshotEvidence?.redactionState, 'raw_local_only');
+
+  const httpEvidence = graph.evidence.find((item) => item.id === result.evidenceId);
+  assert.equal(httpEvidence?.kind, 'http_exchange');
+  assert.equal(httpEvidence?.redactionState, 'redacted');
+  const httpContent = platform.evidence.readEvidenceContent(httpEvidence?.id ?? '').toString('utf8');
+  assert.ok(httpContent.includes('playwright_controller'));
+  assert.ok(httpContent.includes('runner-test'));
+  assert.ok(httpContent.includes('blockedByScope'));
+  assert.ok(httpContent.includes('[redacted]'));
+  for (const secret of ['raw-secret', 'runtime-secret', 'console-secret', 'third-party-secret', 'nav-secret']) {
+    assert.ok(!httpContent.includes(secret), `HTTP evidence leaked ${secret}`);
+  }
+
+  const textContent = platform.evidence.readEvidenceContent(snapshots[0]?.textEvidenceId ?? '').toString('utf8');
+  assert.ok(textContent.includes('browser_page_snapshot'));
+  assert.ok(textContent.includes('[redacted]'));
+  for (const secret of ['runtime-secret', 'console-secret', 'third-party-secret', 'title-secret']) {
+    assert.ok(!textContent.includes(secret), `snapshot evidence leaked ${secret}`);
+  }
+
+  const closed = await platform.browserSessions.close(session.id);
+  assert.equal(closed.status, 'closed');
+  assert.deepEqual(browserRuntime.closedSessions, [session.id]);
+});
+
+test('Playwright browser runner blocks out-of-scope final navigation without storing evidence', async () => {
+  const browserRuntime = new FakeBrowserRuntime(() => ({
+    finalUrl: 'https://evil.test/final?token=redirect-secret',
+    title: 'Out of scope',
+    status: 302,
+    statusText: 'Found',
+    bodyPreview: 'redirect secret=redirect-secret',
+    screenshot: Buffer.from('should-not-store'),
+    textPreview: 'should not store',
+    networkEvents: [{ url: 'https://evil.test/final?token=redirect-secret', method: 'GET', status: 302 }],
+  }));
+  const platform = createPlatform({ browserRuntime });
+  const run = platform.graph.createRun({
+    target: 'https://app.example.com',
+    goal: 'Block renderer redirects outside scope',
+    scopePolicy: policy,
+    workerPool: [{ name: 'mock-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+  const session = platform.browserSessions.start({ runId: run.id, startUrl: 'https://app.example.com' });
+
+  const result = await platform.tools.invoke({
+    runId: run.id,
+    tool: 'browser.navigate',
+    target: 'https://app.example.com/redirect',
+    method: 'GET',
+    riskLevel: 'R1',
+    args: { sessionId: session.id },
+  });
+
+  assert.equal(result.status, 'blocked');
+  assert.match(result.reason, /out of scope/i);
+  assert.equal(Object.values(platform.store.state.browserSnapshots).filter((item) => item.runId === run.id).length, 0);
+  assert.equal(platform.graph.getGraph(run.id).evidence.length, 0);
+  const audit = Object.values(platform.store.state.toolInvocations).filter((item) => item.runId === run.id);
+  assert.equal(audit.length, 1);
+  assert.equal(audit[0]?.status, 'blocked');
+  assert.ok(!JSON.stringify(audit).includes('redirect-secret'));
 });
 
 test('REST API accepts absolute-form HTTP proxy requests and captures redacted evidence', async () => {

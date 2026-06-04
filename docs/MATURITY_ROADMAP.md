@@ -20,21 +20,21 @@ For a deeper project-by-project comparison of high-star AI red-team agents, LLM 
 
 ### 1. Browser And Proxy Runner
 
-Goal: turn the current `local_fetch_controller`, HAR import, browser snapshots, and explicit HTTP proxy capture into a real local runner workflow.
+Goal: turn the default `local_fetch_controller`, optional Playwright controller, HAR import, browser snapshots, and explicit HTTP proxy capture into a real local runner workflow.
 
 Concrete work:
 
-- Add a Playwright-backed browser controller behind the existing browser session API.
+- Harden the Playwright-backed browser controller behind the existing browser session API.
 - Persist browser contexts as run-local session metadata, not raw cookies in graph state.
-- Add trace/screenshot/video evidence with `raw_local_only` defaults.
+- Add trace/video evidence with `raw_local_only` defaults.
 - Keep navigation, capture, and replay behind `ScopePolicy`.
 - Design TLS MITM as a separate approval-gated desktop capability with local CA lifecycle controls.
 
 Acceptance:
 
 - A run can open a browser context, navigate an in-scope target with JavaScript execution, capture bounded evidence, and close the session.
-- Out-of-scope navigation is blocked before storage.
-- Tests cover scope blocking, redaction, and raw-local-only screenshot handling.
+- Out-of-scope renderer requests and final navigation are blocked before storage.
+- Tests cover scope blocking, redaction, raw-local-only screenshot handling, and blocked navigation audit records.
 
 ### 2. One Mature Scanner Adapter At A Time
 
