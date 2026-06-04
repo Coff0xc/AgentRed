@@ -89,7 +89,13 @@ export class AutopilotService {
   }
 
   private nextAutomatableRecommendation(runId: string): StrategyRecommendation | undefined {
-    return this.strategy.getBrief(runId).recommendations.find((recommendation) => recommendation.toolRequest);
+    const brief = this.strategy.getBrief(runId);
+    // Only pick recommendations that explicitly match the current phase.
+    // This prevents autopilot from issuing R2 surface probes before baseline evidence exists,
+    // or jumping to report generation while candidate findings are still unvalidated.
+    return brief.recommendations.find(
+      (r) => r.toolRequest && r.phase === brief.currentPhase,
+    );
   }
 
   private result(runId: string, result: Omit<AutopilotTickResult, 'runId'>): AutopilotTickResult {

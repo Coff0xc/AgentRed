@@ -6,17 +6,23 @@ import type { WorkerToolRequest } from '../workers/types.js';
 import type { DomainSkillService } from '../skills/domain-skill-service.js';
 import type { PocTemplateService, WorkerPocTemplateContext } from '../poc/poc-template-service.js';
 
+export type AssessmentPhase = 'recon' | 'surface_map' | 'vuln_probe' | 'report';
+
 export interface StrategyRecommendation {
   id: string;
   title: string;
   rationale: string;
   riskLevel: RiskLevel;
   toolRequest?: WorkerToolRequest;
+  /** The phase this recommendation belongs to. Autopilot only picks recommendations matching currentPhase. */
+  phase?: AssessmentPhase;
 }
 
 export interface RunStrategyBrief {
   runId: string;
   mode: 'dispatcher_controlled_agent_worker';
+  /** Current assessment phase derived from run state. */
+  currentPhase: AssessmentPhase;
   summary: string;
   recommendations: StrategyRecommendation[];
   workerHints: string[];
@@ -50,6 +56,7 @@ export class StrategyService {
       template.workerHints.map((hint) => `[${template.id}] ${hint}`),
     );
     const recommendations: StrategyRecommendation[] = [];
+    const currentPhase = derivePhase(activeEvidence.length, activeFindings);
 
     if (pendingApprovals.length > 0) {
       recommendations.push({
@@ -61,14 +68,14 @@ export class StrategyService {
     }
 
     if (activeEvidence.length === 0) {
-      recommendations.push(baselineHttp(snapshot.run.target));
-      recommendations.push(scannerTemplate(snapshot.run.target, 'web.technology_fingerprint', 'R1'));
-      recommendations.push(scannerTemplate(snapshot.run.target, 'web.link_form_map', 'R1'));
-      recommendations.push(scannerTemplate(snapshot.run.target, 'web.csp_analysis', 'R1'));
-      recommendations.push(scannerTemplate(snapshot.run.target, 'web.cors_policy', 'R1'));
-      recommendations.push(scannerTemplate(snapshot.run.target, 'web.security_txt_policy', 'R1'));
-      recommendations.push(scannerTemplate(snapshot.run.target, 'web.redirect_policy', 'R1'));
-      recommendations.push(scannerTemplate(snapshot.run.target, 'web.cache_policy', 'R1'));
+      recommendations.push({ ...baselineHttp(snapshot.run.target), phase: 'recon' });
+      recommendations.push({ ...scannerTemplate(snapshot.run.target, 'web.technology_fingerprint', 'R1'), phase: 'recon' });
+      recommendations.push({ ...scannerTemplate(snapshot.run.target, 'web.link_form_map', 'R1'), phase: 'recon' });
+      recommendations.push({ ...scannerTemplate(snapshot.run.target, 'web.csp_analysis', 'R1'), phase: 'recon' });
+      recommendations.push({ ...scannerTemplate(snapshot.run.target, 'web.cors_policy', 'R1'), phase: 'recon' });
+      recommendations.push({ ...scannerTemplate(snapshot.run.target, 'web.security_txt_policy', 'R1'), phase: 'recon' });
+      recommendations.push({ ...scannerTemplate(snapshot.run.target, 'web.redirect_policy', 'R1'), phase: 'recon' });
+      recommendations.push({ ...scannerTemplate(snapshot.run.target, 'web.cache_policy', 'R1'), phase: 'recon' });
     } else if (activeFindings.length === 0) {
       if (activeCredentials.length >= 2 && activeEvidence.length >= 2) {
         const recentEvidence = activeEvidence.slice(-2);
@@ -78,6 +85,7 @@ export class StrategyService {
           rationale:
             'Multiple credential references and evidence items exist; compare role-visible responses before proposing authorization findings.',
           riskLevel: 'R0',
+          phase: 'surface_map',
           toolRequest: {
             tool: 'access.compare_evidence',
             target: snapshot.run.target,
@@ -94,20 +102,21 @@ export class StrategyService {
           },
         });
       }
-      recommendations.push(scannerTemplate(snapshot.run.target, 'web.security_headers', 'R2'));
-      recommendations.push(scannerTemplate(snapshot.run.target, 'web.cookie_flags', 'R1'));
-      recommendations.push(scannerTemplate(snapshot.run.target, 'web.cookie_scope_analysis', 'R1'));
-      recommendations.push(scannerTemplate(snapshot.run.target, 'web.js_asset_inventory', 'R1'));
-      recommendations.push(scannerTemplate(snapshot.run.target, 'web.websocket_discovery_plan', 'R1'));
-      recommendations.push(scannerTemplate(snapshot.run.target, 'web.sourcemap_exposure_plan', 'R1'));
-      recommendations.push(scannerTemplate(snapshot.run.target, 'web.openapi_discovery', 'R2'));
-      recommendations.push(scannerTemplate(snapshot.run.target, 'web.oauth_oidc_metadata', 'R1'));
-      recommendations.push(scannerTemplate(snapshot.run.target, 'web.graphql_introspection_plan', 'R2'));
+      recommendations.push({ ...scannerTemplate(snapshot.run.target, 'web.security_headers', 'R2'), phase: 'surface_map' });
+      recommendations.push({ ...scannerTemplate(snapshot.run.target, 'web.cookie_flags', 'R1'), phase: 'surface_map' });
+      recommendations.push({ ...scannerTemplate(snapshot.run.target, 'web.cookie_scope_analysis', 'R1'), phase: 'surface_map' });
+      recommendations.push({ ...scannerTemplate(snapshot.run.target, 'web.js_asset_inventory', 'R1'), phase: 'surface_map' });
+      recommendations.push({ ...scannerTemplate(snapshot.run.target, 'web.websocket_discovery_plan', 'R1'), phase: 'surface_map' });
+      recommendations.push({ ...scannerTemplate(snapshot.run.target, 'web.sourcemap_exposure_plan', 'R1'), phase: 'surface_map' });
+      recommendations.push({ ...scannerTemplate(snapshot.run.target, 'web.openapi_discovery', 'R2'), phase: 'surface_map' });
+      recommendations.push({ ...scannerTemplate(snapshot.run.target, 'web.oauth_oidc_metadata', 'R1'), phase: 'surface_map' });
+      recommendations.push({ ...scannerTemplate(snapshot.run.target, 'web.graphql_introspection_plan', 'R2'), phase: 'surface_map' });
       recommendations.push({
         id: 'finding.review_evidence',
         title: 'Review evidence and propose candidate finding',
         rationale: 'Evidence exists but no candidate finding is in review yet.',
         riskLevel: 'R0',
+        phase: 'surface_map',
         toolRequest: {
           tool: 'finding.propose',
           target: snapshot.run.target,
@@ -132,6 +141,7 @@ export class StrategyService {
         title: 'Validate candidate findings',
         rationale: 'Candidate findings should be confirmed or rejected before report generation.',
         riskLevel: 'R0',
+        phase: 'vuln_probe',
       });
     } else {
       recommendations.push({
@@ -139,6 +149,7 @@ export class StrategyService {
         title: 'Generate report bundle',
         rationale: 'Confirmed or reviewed findings are ready for a reproducible report bundle.',
         riskLevel: 'R0',
+        phase: 'report',
       });
     }
 
@@ -154,6 +165,7 @@ export class StrategyService {
     return {
       runId,
       mode: 'dispatcher_controlled_agent_worker',
+      currentPhase,
       summary: `${activeEvidence.length} evidence item(s), ${activeFindings.length} active finding(s), ${pendingApprovals.length} pending approval(s), ${blockedCount} blocked tool call(s).`,
       recommendations: finalRecommendations.slice(0, 16),
       workerHints: [
@@ -190,6 +202,13 @@ export class StrategyService {
     }
     return { intent, recommendation };
   }
+}
+
+function derivePhase(evidenceCount: number, activeFindings: { validationState: string }[]): AssessmentPhase {
+  if (evidenceCount === 0) return 'recon';
+  if (activeFindings.length === 0) return 'surface_map';
+  if (activeFindings.some((f) => f.validationState === 'candidate')) return 'vuln_probe';
+  return 'report';
 }
 
 export function strategyHintsForWorker(): string[] {
@@ -358,6 +377,7 @@ function pocTemplateRecommendations(input: {
           `The enabled PoC template expects ${template.requiredEvidence.join(', ')} evidence. ` +
           'Run this governed scanner template through the Tool Gateway; profile readiness and scope policy still apply.',
         riskLevel: scanner?.defaultRiskLevel ?? 'R2',
+        phase: 'surface_map',
         toolRequest: {
           tool: 'scanner.run_template',
           target: input.target,
@@ -386,6 +406,7 @@ function scannerRecommendationForTemplate(
       `The enabled high-risk template expects ${template.requiredEvidence.join(', ')} evidence. ` +
       'Request this governed scanner template through the Tool Gateway; profile readiness, scope, rate, and approval gates still apply.',
     riskLevel,
+    phase: 'surface_map',
     toolRequest: {
       tool: 'scanner.run_template',
       target,
@@ -407,6 +428,7 @@ function browserRecommendationForTemplate(
     title: `${template.name}: capture browser evidence`,
     rationale: 'Rendered browser evidence helps validate user-visible impact while keeping cookies and tokens outside Worker context.',
     riskLevel: 'R1',
+    phase: 'surface_map',
     toolRequest: {
       tool: 'browser.navigate',
       target,
@@ -425,6 +447,7 @@ function oastInboxRecommendation(target: string, template: WorkerPocTemplateCont
     rationale:
       'The enabled template requires callback evidence. Start a local inbox first; live payload placement remains approval-gated validation work.',
     riskLevel: 'R0',
+    phase: 'surface_map',
     toolRequest: {
       tool: 'oast.start_session',
       target,
@@ -486,6 +509,7 @@ function roleDiffRecommendations(
       rationale:
         'The enabled PoC template has enough credential and evidence context to create a redacted authorization diff artifact.',
       riskLevel: 'R0',
+      phase: 'surface_map',
       toolRequest: {
         tool: 'access.compare_evidence',
         target,
