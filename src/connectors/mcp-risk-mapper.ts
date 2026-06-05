@@ -20,7 +20,7 @@ export class McpRiskMapper {
 
   private readonly r1Patterns = [
     /^(scan|probe|discover|list|get|fetch|read|query|search|find|check|detect|identify|network_tool)$/i,
-    /(scanner|discovery|reconnaissance|enumeration|scans)/i,
+    /(scan|probe|discover|list|scanner|discovery|reconnaissance|enumeration|scans)/i,
   ];
 
   private readonly r2Patterns = [
@@ -34,8 +34,10 @@ export class McpRiskMapper {
   ];
 
   private readonly r4Patterns = [
-    /^(delete|drop|destroy|remove|purge|wipe|clear|dump|steal|exfiltrate|download|upload|admin_tool)$/i,
-    /(credential|password|token|secret|key|backdoor|persistence|privesc|deletes)/i,
+    /^(delete|drop|destroy|remove|purge|wipe|clear|dump|steal|exfiltrate|admin_tool)$/i,
+    /_(dump|steal|exfiltrate)$/i,
+    /^(credential_dump|backdoor|steal_token)/i,
+    /(backdoor|persistence|privesc)/i,
   ];
 
   /**
@@ -56,29 +58,46 @@ export class McpRiskMapper {
     const lowerDesc = (toolDescription || '').toLowerCase();
     const combinedText = `${lowerName} ${lowerDesc}`;
 
-    // Check R4 (destructive) first - highest priority
+    // Check R0 (metadata) first - most specific patterns
+    if (this.matchesAnyPattern(lowerName, this.r0Patterns)) {
+      return 'R0';
+    }
+
+    // Check R4 (destructive) - check name first for exact matches
+    if (this.matchesAnyPattern(lowerName, this.r4Patterns)) {
+      return 'R4';
+    }
+
+    // Check R2 (active scanning) before R1 to catch fuzzing/brute force
+    if (this.matchesAnyPattern(lowerName, this.r2Patterns)) {
+      return 'R2';
+    }
+
+    // Check R3 (exploit/state change)
+    if (this.matchesAnyPattern(lowerName, this.r3Patterns)) {
+      return 'R3';
+    }
+
+    // Check R1 (read-only)
+    if (this.matchesAnyPattern(lowerName, this.r1Patterns)) {
+      return 'R1';
+    }
+
+    // Now check description for additional context (only if name didn't match)
     if (this.matchesAnyPattern(combinedText, this.r4Patterns)) {
       return 'R4';
     }
 
-    // Check R3 (exploit/state change)
     if (this.matchesAnyPattern(combinedText, this.r3Patterns)) {
       return 'R3';
     }
 
-    // Check R2 (active scanning)
     if (this.matchesAnyPattern(combinedText, this.r2Patterns)) {
       return 'R2';
     }
 
-    // Check R1 (read-only)
     if (this.matchesAnyPattern(combinedText, this.r1Patterns)) {
       return 'R1';
-    }
-
-    // Check R0 (metadata only)
-    if (this.matchesAnyPattern(combinedText, this.r0Patterns)) {
-      return 'R0';
     }
 
     // Default to R3 for fail-safe (unknown tools require approval)
