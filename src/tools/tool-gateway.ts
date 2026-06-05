@@ -27,6 +27,7 @@ import type { ScannerResultImportService } from '../scanners/scanner-result-impo
 import type { RunEventService } from '../events/run-event-service.js';
 import type { ObservabilityService } from '../observability/observability-service.js';
 import type { McpExecutionService } from '../connectors/mcp-execution-service.js';
+import { mcpRiskMapper } from '../connectors/mcp-risk-mapper.js';
 import { redactArgs, redactHeaders, redactText, redactUrl } from '../security/redaction.js';
 import { evaluateScope } from '../scope/policy.js';
 import type { PlatformStore } from '../storage/store.js';
@@ -323,6 +324,14 @@ export class ToolGateway {
         status: 'pass',
         reason: `${scannerPlan.plan.engine} plan is ready on profile ${scannerPlan.plan.profileId}`,
       });
+    }
+
+    const mcpGate = input.tool === 'mcp.invoke' ? this.previewMcpInvocation(input, approvalResolution.status) : undefined;
+    if (mcpGate) {
+      gates.push(...mcpGate.gates);
+      if (mcpGate.status === 'blocked' || mcpGate.status === 'approval_required') {
+        return finish(mcpGate.status);
+      }
     }
 
     const rateLimitDecision = this.peekRateLimit(input.runId, run.scopePolicy.rateLimits.requestsPerMinute);
@@ -740,40 +749,6 @@ export class ToolGateway {
     if (input.tool === 'oast.record_callback' && !this.oast) {
       return { gate: 'service.oast', status: 'blocked', reason: 'OAST service is not configured' };
     }
-    if (input.tool === 'mcp.invoke') {
-      if (!this.mcp) {
-        return { gate: 'service.mcp', status: 'blocked', reason: 'MCP execution service is not configured' };
-      }
-      const connectionId = optionalArgText(input.args.connectionId);
-      const toolName = optionalArgText(input.args.toolName);
-      if (!connectionId || !toolName) {
-        return {
-          gate: 'mcp.args',
-          status: 'blocked',
-          reason: 'MCP invocation requires connectionId and toolName',
-        };
-      }
-      const connection = this.mcp.getConnection(connectionId);
-      if (!connection) {
-        return {
-          gate: 'mcp.connection',
-          status: 'blocked',
-          reason: `MCP connection not found: ${connectionId}`,
-        };
-      }
-      if (!connection.isReady()) {
-        return {
-          gate: 'mcp.connection',
-          status: 'blocked',
-          reason: `MCP connection ${connectionId} is not ready: ${connection.getState().status}`,
-        };
-      }
-      return {
-        gate: 'mcp.connection',
-        status: 'pass',
-        reason: `MCP connection ${connectionId} is ready and tool ${toolName} will be validated at invocation time`,
-      };
-    }
     if (input.tool === 'finding.propose') {
       if (!this.findings) {
         return { gate: 'service.finding', status: 'blocked', reason: 'Finding service is not configured' };
@@ -1086,6 +1061,63 @@ export class ToolGateway {
     }
   }
 
+  private previewMcpInvocation(input: ToolInvokeInput, approvalStatus?: ApprovalStatus): {
+    status: 'executable' | 'blocked' | 'approval_required';
+    gates: ToolPlanPreviewGate[];
+  } | undefined {
+    if (!this.mcp) {
+      return { status: 'blocked', gates: [{ gate: 'service.mcp', status: 'blocked', reason: 'MCP execution service is not configured' }] };
+    }
+    const connectionId = optionalArgText(input.args.connectionId);
+    const toolName = optionalArgText(input.args.toolName);
+    if (!connectionId || !toolName) {
+      return { status: 'blocked', gates: [{ gate: 'mcp.args', status: 'blocked', reason: 'MCP invocation requires connectionId and toolName' }] };
+    }
+    const connection = this.mcp.getConnection(connectionId);
+    if (!connection) {
+      return { status: 'blocked', gates: [{ gate: 'mcp.connection', status: 'blocked', reason: `MCP connection not found: ${connectionId}` }] };
+    }
+    if (!connection.isReady()) {
+      return {
+        status: 'blocked',
+        gates: [{ gate: 'mcp.connection', status: 'blocked', reason: `MCP connection ${connectionId} is not ready: ${connection.getState().status}` }],
+      };
+    }
+    const effectiveRiskLevel = this.effectiveMcpRiskLevel(input.riskLevel, connectionId, toolName);
+    const run = this.store.state.runs[input.runId];
+    const scopeDecision = evaluateScope(
+      run.scopePolicy,
+      input.target,
+      input.method,
+      effectiveRiskLevel,
+      approvalStatus,
+      input.r4AuthorizationToken,
+    );
+    const gates: ToolPlanPreviewGate[] = [
+      {
+        gate: 'mcp.connection',
+        status: 'pass',
+        reason: `MCP connection ${connectionId} is ready and tool ${toolName} is available`,
+      },
+      {
+        gate: 'mcp.risk',
+        status: input.riskLevel === effectiveRiskLevel ? 'pass' : 'info',
+        reason: `Effective MCP risk level is ${effectiveRiskLevel}`,
+        detail: { requestedRiskLevel: input.riskLevel, effectiveRiskLevel },
+      },
+    ];
+    if (scopeDecision.action === 'approval_required') {
+      gates.push({ gate: 'mcp.scope.policy', status: 'approval_required', reason: scopeDecision.reason });
+      return { status: 'approval_required', gates };
+    }
+    if (scopeDecision.action === 'deny') {
+      gates.push({ gate: 'mcp.scope.policy', status: 'blocked', reason: scopeDecision.reason });
+      return { status: 'blocked', gates };
+    }
+    gates.push({ gate: 'mcp.scope.policy', status: 'pass', reason: scopeDecision.reason });
+    return { status: 'executable', gates };
+  }
+
   private useCredentialPlaceholder(input: ToolInvokeInput, startedMs: number): ToolInvokeResult {
     if (!this.credentials) {
       const invocation = this.recordInvocation(input, 'blocked', 'Credential service is not configured', input.approvalId);
@@ -1299,13 +1331,57 @@ export class ToolGateway {
       return this.finishTool(input, { status: 'blocked', invocationId: invocation.id, reason }, startedMs, { reason });
     }
 
+    const effectiveRiskLevel = this.effectiveMcpRiskLevel(input.riskLevel, connectionId, toolName);
+    const effectiveInput = { ...input, riskLevel: effectiveRiskLevel };
+    const run = this.store.state.runs[input.runId];
+    const approvalResolution = this.resolveApprovalStatus(effectiveInput);
+    if (!approvalResolution.valid) {
+      const invocation = this.recordInvocation(effectiveInput, 'blocked', approvalResolution.reason, input.approvalId);
+      return this.finishTool(effectiveInput, { status: 'blocked', invocationId: invocation.id, reason: approvalResolution.reason }, startedMs, {
+        reason: approvalResolution.reason,
+        effectiveRiskLevel,
+      });
+    }
+    const scopeDecision = evaluateScope(
+      run.scopePolicy,
+      input.target,
+      input.method,
+      effectiveRiskLevel,
+      approvalResolution.status,
+      input.r4AuthorizationToken,
+    );
+    if (scopeDecision.action === 'approval_required') {
+      const request = this.approvals.request({
+        runId: input.runId,
+        tool: input.tool,
+        target: redactUrl(input.target),
+        riskLevel: effectiveRiskLevel,
+        reason: scopeDecision.reason,
+      });
+      const invocation = this.recordInvocation(effectiveInput, 'approval_required', scopeDecision.reason, request.id);
+      return this.finishTool(
+        effectiveInput,
+        { status: 'approval_required', invocationId: invocation.id, approvalId: request.id, reason: scopeDecision.reason },
+        startedMs,
+        { approvalId: request.id, effectiveRiskLevel, requestedRiskLevel: input.riskLevel, reason: scopeDecision.reason },
+      );
+    }
+    if (scopeDecision.action === 'deny') {
+      const invocation = this.recordInvocation(effectiveInput, 'blocked', scopeDecision.reason, input.approvalId);
+      return this.finishTool(effectiveInput, { status: 'blocked', invocationId: invocation.id, reason: scopeDecision.reason }, startedMs, {
+        effectiveRiskLevel,
+        requestedRiskLevel: input.riskLevel,
+        reason: scopeDecision.reason,
+      });
+    }
+
     // Parse tool arguments
     const toolArgs = typeof input.args.args === 'object' && input.args.args !== null && !Array.isArray(input.args.args)
       ? (input.args.args as Record<string, unknown>)
       : {};
 
     // Record allowed invocation
-    const invocation = this.recordInvocation(input, 'allowed', undefined, input.approvalId, `stdout://${newId('tool')}`);
+    const invocation = this.recordInvocation(effectiveInput, 'allowed', undefined, input.approvalId, `stdout://${newId('tool')}`);
 
     try {
       // Invoke MCP tool through the connection
@@ -1315,7 +1391,7 @@ export class ToolGateway {
         connectionId,
         toolName,
         args: toolArgs,
-        riskLevel: input.riskLevel,
+        riskLevel: effectiveRiskLevel,
         approvalId: input.approvalId,
         timeoutMs,
       });
@@ -1323,7 +1399,7 @@ export class ToolGateway {
       this.completeInvocation(invocation.id);
 
       return this.finishTool(
-        input,
+        effectiveInput,
         {
           status: 'allowed',
           invocationId: invocation.id,
@@ -1366,6 +1442,12 @@ export class ToolGateway {
         { mcpConnectionId: connectionId, mcpToolName: toolName, reason },
       );
     }
+  }
+
+  private effectiveMcpRiskLevel(requestedRiskLevel: RiskLevel, connectionId: string, toolName: string): RiskLevel {
+    const metadata = this.mcp?.getToolMetadata(connectionId, toolName);
+    const inferredRiskLevel = metadata?.estimatedRiskLevel ?? mcpRiskMapper.inferRiskLevel(toolName, metadata?.description);
+    return maxRiskLevel(requestedRiskLevel, inferredRiskLevel);
   }
 
   private async executeEndpointDiscoveryTemplate(
@@ -3564,6 +3646,14 @@ function isShellCommandAllowed(command: string): boolean {
 
 function commandDisplayName(command: string): string {
   return basename(command).toLowerCase();
+}
+
+function maxRiskLevel(left: RiskLevel, right: RiskLevel): RiskLevel {
+  return riskRank(left) >= riskRank(right) ? left : right;
+}
+
+function riskRank(riskLevel: RiskLevel): number {
+  return { R0: 0, R1: 1, R2: 2, R3: 3, R4: 4 }[riskLevel];
 }
 
 /** Maps a toolbox engine to the scanner-result normalizer engine, or undefined if none exists. */

@@ -7,6 +7,7 @@ import type { RunEventService } from '../events/run-event-service.js';
 import type { EvidenceEngine } from '../evidence/evidence-engine.js';
 import { redactText } from '../security/redaction.js';
 import type { PlatformStore } from '../storage/store.js';
+import { mcpRiskMapper } from './mcp-risk-mapper.js';
 
 /**
  * MCP (Model Context Protocol) connection configuration
@@ -240,9 +241,8 @@ export class McpClient {
         name: tool.name,
         description: tool.description,
         inputSchema: tool.inputSchema as Record<string, unknown> | undefined,
-        // Default risk assessment - caller must override based on actual tool behavior
-        estimatedRiskLevel: 'R1' as RiskLevel,
-        requiresApproval: false,
+        estimatedRiskLevel: mcpRiskMapper.inferRiskLevel(tool.name, tool.description),
+        requiresApproval: mcpRiskMapper.requiresApproval(tool.name, tool.description),
       }));
 
       this.connectionState.status = 'connected';
@@ -573,6 +573,10 @@ export class McpExecutionService {
    */
   getConnection(connectionId: string): McpClient | undefined {
     return this.clients.get(connectionId);
+  }
+
+  getToolMetadata(connectionId: string, toolName: string): McpToolMetadata | undefined {
+    return this.clients.get(connectionId)?.getState().tools.find((tool) => tool.name === toolName);
   }
 
   /**

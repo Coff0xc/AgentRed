@@ -14,6 +14,7 @@ import { CloudIamImportService } from './cloud/cloud-iam-import-service.js';
 import { ConnectorRunService } from './connectors/connector-run-service.js';
 import { ConnectorRegistryService } from './connectors/connector-registry-service.js';
 import { EcosystemCoverageService } from './connectors/ecosystem-coverage-service.js';
+import { McpExecutionService } from './connectors/mcp-execution-service.js';
 import { ToolIntegrationBacklogService } from './connectors/tool-integration-backlog-service.js';
 import { CredentialReferenceService } from './credentials/credential-reference-service.js';
 import { DesktopRunnerReadinessService } from './desktop/desktop-runner-readiness-service.js';
@@ -89,6 +90,7 @@ export interface Platform {
   ecosystemCoverage: EcosystemCoverageService;
   toolIntegrationBacklog: ToolIntegrationBacklogService;
   connectorRuns: ConnectorRunService;
+  mcp: McpExecutionService;
   skills: DomainSkillService;
   skillReadiness: DomainSkillReadinessService;
   pocs: PocTemplateService;
@@ -169,6 +171,7 @@ export function createPlatform(options: CreatePlatformOptions = {}): Platform {
   const connectors = new ConnectorRegistryService(store, graph, events);
   const ecosystemCoverage = new EcosystemCoverageService(connectors, toolbox);
   const toolIntegrationBacklog = new ToolIntegrationBacklogService(ecosystemCoverage);
+  const mcp = new McpExecutionService(store, evidence, events);
   const skills = new DomainSkillService(store, graph, events);
   const skillReadiness = new DomainSkillReadinessService(store, skills);
   const pocs = new PocTemplateService(store, graph, events);
@@ -185,6 +188,7 @@ export function createPlatform(options: CreatePlatformOptions = {}): Platform {
     accessReviews,
     oast,
     scannerResults,
+    mcp,
   );
   const toolPacks = new ToolPackService(store, tools, events);
   const connectorRuns = new ConnectorRunService(store, connectors, tools, events);
@@ -278,6 +282,7 @@ export function createPlatform(options: CreatePlatformOptions = {}): Platform {
     ecosystemCoverage,
     toolIntegrationBacklog,
     connectorRuns,
+    mcp,
     skills,
     skillReadiness,
     pocs,

@@ -329,6 +329,55 @@ test('ToolGateway requires matching R4 token and approval before execution', asy
   }
 });
 
+test('Platform wires MCP service and ToolGateway enforces inferred MCP risk', async () => {
+  const platform = createPlatform();
+  const run = platform.graph.createRun({
+    target: 'https://app.example.com',
+    goal: 'Validate MCP governance',
+    scopePolicy: { ...policy, r4AuthorizationToken: 'break-glass' },
+    workerPool: [{ name: 'mock-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+  const fakeConnection = {
+    isReady: () => true,
+    getState: () => ({
+      status: 'connected',
+      tools: [{ name: 'delete_user', description: 'Deletes user accounts', estimatedRiskLevel: 'R4', requiresApproval: true }],
+    }),
+    invokeTool: async () => {
+      throw new Error('should not execute without R4 gate');
+    },
+  };
+  (platform.mcp as unknown as { getConnection(id: string): typeof fakeConnection | undefined }).getConnection = (id: string) =>
+    id === 'local-mcp' ? fakeConnection : undefined;
+  (platform.mcp as unknown as { getToolMetadata(id: string, tool: string): unknown }).getToolMetadata = (id: string, tool: string) =>
+    id === 'local-mcp' && tool === 'delete_user' ? fakeConnection.getState().tools[0] : undefined;
+
+  const preview = await platform.tools.preview({
+    runId: run.id,
+    tool: 'mcp.invoke',
+    target: 'https://app.example.com',
+    method: 'POST',
+    riskLevel: 'R1',
+    args: { connectionId: 'local-mcp', toolName: 'delete_user', args: {} },
+  });
+  assert.equal(preview.status, 'blocked');
+  assert.equal(preview.gates.find((gate) => gate.gate === 'mcp.risk')?.detail?.effectiveRiskLevel, 'R4');
+
+  const result = await platform.tools.invoke({
+    runId: run.id,
+    tool: 'mcp.invoke',
+    target: 'https://app.example.com',
+    method: 'POST',
+    riskLevel: 'R1',
+    args: { connectionId: 'local-mcp', toolName: 'delete_user', args: {} },
+  });
+
+  assert.equal(result.status, 'blocked');
+  assert.match(result.reason, /authorization token|R4/i);
+  const invocation = Object.values(platform.store.state.toolInvocations).find((item) => item.tool === 'mcp.invoke');
+  assert.equal(invocation?.riskLevel, 'R4');
+});
+
 test('R4 break-glass token is redacted from API responses, worker envelopes, and exports', async () => {
   const platform = createPlatform();
   const api = await startApiServer(platform, { port: 0, authToken: 'test-token' });
