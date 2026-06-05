@@ -204,7 +204,7 @@ export class AgentRedProgressClient {
       }
 
       const data = await response.json();
-      const events = data.events || [];
+      const events = Array.isArray(data) ? data : data.events || [];
 
       // Filter events newer than last received
       const newEvents = this.lastEventTimestamp

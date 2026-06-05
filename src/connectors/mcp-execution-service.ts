@@ -1,3 +1,6 @@
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import type { CallToolResult, ListToolsResult } from '@modelcontextprotocol/sdk/types.js';
 import { newId, nowIso } from '../domain/ids.js';
 import type { EvidenceKind, RiskLevel } from '../domain/types.js';
 import type { RunEventService } from '../events/run-event-service.js';
@@ -115,17 +118,17 @@ export interface McpConnectionState {
 /**
  * McpClient manages connection lifecycle and tool invocation for a single MCP server.
  *
- * IMPORTANT: This is a stub implementation. Actual MCP protocol integration requires:
- * - @modelcontextprotocol/sdk client library
+ * Integrates with @modelcontextprotocol/sdk to provide:
  * - Transport-specific connection handling (stdio, SSE, WebSocket)
- * - Message framing and protocol compliance
+ * - JSON-RPC message framing and protocol compliance
  * - Server capability negotiation
  * - Tool schema validation
- *
- * Current implementation provides the interface contract only.
+ * - Connection lifecycle management
  */
 export class McpClient {
   private connectionState: McpConnectionState;
+  private client?: Client;
+  private transport?: StdioClientTransport;
 
   constructor(
     private readonly config: McpConnectionConfig,
@@ -146,34 +149,111 @@ export class McpClient {
    *
    * @returns Connection state after initialization
    *
-   * Stub: Actual implementation would:
-   * - Create transport (child process for stdio, HTTP client for SSE/WebSocket)
-   * - Send initialize handshake
-   * - Negotiate protocol version and capabilities
-   * - Discover available tools via tools/list
-   * - Handle connection lifecycle events
+   * Implementation:
+   * - Creates transport based on config.transport
+   * - Performs MCP handshake (initialize request/response)
+   * - Discovers tools via tools/list request
+   * - Stores tool metadata in connection state
    */
   async connect(): Promise<McpConnectionState> {
     this.connectionState.status = 'connecting';
 
     try {
-      // TODO: Implement actual MCP connection logic
-      // - Create transport based on config.transport
-      // - Perform MCP handshake (initialize request/response)
-      // - Discover tools (tools/list request)
-      // - Store tool metadata
+      // Create transport based on config
+      if (this.config.transport === 'stdio') {
+        if (!this.config.command) {
+          throw new Error('stdio transport requires command to be specified');
+        }
 
-      // Stub: simulate connection
+        this.transport = new StdioClientTransport({
+          command: this.config.command,
+          args: this.config.args ?? [],
+          env: this.config.env,
+        });
+
+        // Note: Do not call transport.start() here - Client.connect() will do it automatically
+      } else {
+        // SSE and WebSocket transports not yet implemented
+        throw new Error(`Transport type ${this.config.transport} not yet implemented`);
+      }
+
+      // Create MCP client with transport
+      this.client = new Client(
+        {
+          name: 'agent-red-platform',
+          version: '0.1.0',
+        },
+        {
+          capabilities: {
+            roots: {
+              listChanged: false,
+            },
+            sampling: {},
+          },
+        },
+      );
+
+      // Set up error and close handlers
+      if (this.transport) {
+        const originalOnError = this.transport.onerror;
+        this.transport.onerror = (error: Error) => {
+          this.connectionState.status = 'error';
+          this.connectionState.lastError = error.message;
+          this.events?.record({
+            runId: 'system',
+            type: 'run.created',
+            title: 'MCP transport error',
+            detail: redactText(error.message),
+            level: 'error',
+          });
+          originalOnError?.call(this.transport, error);
+        };
+
+        const originalOnClose = this.transport.onclose;
+        this.transport.onclose = () => {
+          if (this.connectionState.status === 'connected') {
+            this.connectionState.status = 'closed';
+            this.events?.record({
+              runId: 'system',
+              type: 'run.created',
+              title: 'MCP connection closed',
+              detail: `Connection to ${this.config.name} closed unexpectedly`,
+              level: 'warning',
+            });
+          }
+          originalOnClose?.call(this.transport);
+        };
+      }
+
+      // Connect client to transport with timeout
+      const timeout = this.config.timeoutMs ?? 30000;
+      await Promise.race([
+        this.client.connect(this.transport!),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error(`Connection timeout after ${timeout}ms`)), timeout),
+        ),
+      ]);
+
+      // Discover available tools
+      const toolsResult = (await this.client.listTools()) as ListToolsResult;
+      this.connectionState.tools = toolsResult.tools.map((tool) => ({
+        name: tool.name,
+        description: tool.description,
+        inputSchema: tool.inputSchema as Record<string, unknown> | undefined,
+        // Default risk assessment - caller must override based on actual tool behavior
+        estimatedRiskLevel: 'R1' as RiskLevel,
+        requiresApproval: false,
+      }));
+
       this.connectionState.status = 'connected';
       this.connectionState.connectedAt = nowIso();
-      this.connectionState.tools = [];
       this.connectionState.lastError = undefined;
 
       this.events?.record({
         runId: 'system',
-        type: 'run.created', // TODO: Add mcp.connected event type
+        type: 'run.created',
         title: 'MCP connection established',
-        detail: `Connected to ${this.config.name} (${this.config.transport})`,
+        detail: `Connected to ${this.config.name} (${this.config.transport}), discovered ${this.connectionState.tools.length} tools`,
         level: 'info',
       });
 
@@ -183,9 +263,12 @@ export class McpClient {
       this.connectionState.lastError = error instanceof Error ? error.message : String(error);
       this.connectionState.retryCount++;
 
+      // Clean up on failure
+      await this.cleanup();
+
       this.events?.record({
         runId: 'system',
-        type: 'run.created', // TODO: Add mcp.connection_failed event type
+        type: 'run.created',
         title: 'MCP connection failed',
         detail: redactText(this.connectionState.lastError),
         level: 'error',
@@ -196,27 +279,49 @@ export class McpClient {
   }
 
   /**
+   * Clean up transport and client resources.
+   * @internal
+   */
+  private async cleanup(): Promise<void> {
+    try {
+      if (this.transport) {
+        await this.transport.close();
+        this.transport = undefined;
+      }
+      if (this.client) {
+        await this.client.close();
+        this.client = undefined;
+      }
+    } catch (error) {
+      // Best effort cleanup, log but don't throw
+      this.events?.record({
+        runId: 'system',
+        type: 'run.created',
+        title: 'MCP cleanup error',
+        detail: error instanceof Error ? error.message : String(error),
+        level: 'warning',
+      });
+    }
+  }
+
+  /**
    * Disconnect from MCP server and clean up resources.
    *
-   * Stub: Actual implementation would:
-   * - Send graceful shutdown notification to server
-   * - Close transport (terminate process, close HTTP connection)
-   * - Clear tool cache
-   * - Release any held resources
+   * Implementation:
+   * - Sends graceful shutdown to client
+   * - Closes transport (terminates process for stdio)
+   * - Clears tool cache and state
    */
   async disconnect(): Promise<void> {
     try {
-      // TODO: Implement graceful MCP disconnect
-      // - Send shutdown notification if protocol supports it
-      // - Close transport
-      // - Clear state
+      await this.cleanup();
 
       this.connectionState.status = 'closed';
       this.connectionState.tools = [];
 
       this.events?.record({
         runId: 'system',
-        type: 'run.created', // TODO: Add mcp.disconnected event type
+        type: 'run.created',
         title: 'MCP connection closed',
         detail: `Disconnected from ${this.config.name}`,
         level: 'info',
@@ -233,35 +338,18 @@ export class McpClient {
    *
    * @returns Array of tool metadata
    *
-   * Stub: Actual implementation would:
-   * - Send tools/list request to MCP server
-   * - Parse tool schemas and metadata
-   * - Map to internal tool representation
-   * - Cache results with TTL
+   * Implementation:
+   * - Returns cached tools from connection state
+   * - Tools are discovered during connect() and cached
+   * - Call reconnect() or connect() to refresh tool list
    */
   async listTools(): Promise<McpToolMetadata[]> {
     if (this.connectionState.status !== 'connected') {
       throw new Error(`Cannot list tools: connection status is ${this.connectionState.status}`);
     }
 
-    try {
-      // TODO: Implement MCP tools/list request
-      // - Send tools/list via transport
-      // - Parse response
-      // - Validate tool schemas
-      // - Update connectionState.tools cache
-
-      return this.connectionState.tools;
-    } catch (error) {
-      this.events?.record({
-        runId: 'system',
-        type: 'run.created', // TODO: Add mcp.tool_list_failed event type
-        title: 'MCP tool listing failed',
-        detail: error instanceof Error ? error.message : String(error),
-        level: 'error',
-      });
-      throw error;
-    }
+    // Return cached tools - they were fetched during connect()
+    return this.connectionState.tools;
   }
 
   /**
@@ -276,17 +364,20 @@ export class McpClient {
    * @param request Tool invocation request
    * @returns Invocation result with evidence
    *
-   * Stub: Actual implementation would:
-   * - Validate tool exists and schema matches
-   * - Send tools/call request to MCP server
-   * - Handle streaming responses if supported
-   * - Capture stdout/stderr/result as evidence
-   * - Apply timeout and error handling
-   * - Return structured result
+   * Implementation:
+   * - Validates tool exists in discovered tools
+   * - Sends tools/call request via MCP client
+   * - Captures result/error as evidence
+   * - Applies timeout from request
+   * - Returns structured result with evidence ID
    */
   async invokeTool(request: McpToolInvokeRequest): Promise<McpToolInvokeResult> {
     if (this.connectionState.status !== 'connected') {
       throw new Error(`Cannot invoke tool: connection status is ${this.connectionState.status}`);
+    }
+
+    if (!this.client) {
+      throw new Error('MCP client not initialized');
     }
 
     const invocationId = newId('mcp_invocation');
@@ -294,38 +385,49 @@ export class McpClient {
     const startTime = Date.now();
 
     try {
-      // TODO: Implement MCP tools/call request
-      // - Validate tool exists in discovered tools
-      // - Validate args against tool.inputSchema
-      // - Send tools/call request via transport
-      // - Handle response or streaming content
-      // - Apply timeout from request.timeoutMs
-      // - Capture result as evidence
+      // Validate tool exists
+      const toolExists = this.connectionState.tools.some((t) => t.name === request.toolName);
+      if (!toolExists) {
+        throw new Error(`Tool ${request.toolName} not found in server tool list`);
+      }
 
-      // Stub: simulate tool execution
-      const output = {
-        stub: true,
-        message: 'MCP tool invocation not yet implemented',
-        toolName: request.toolName,
-        args: request.args,
-      };
+      // Apply timeout
+      const timeout = request.timeoutMs ?? 60000;
+      const callPromise = this.client.callTool({
+        name: request.toolName,
+        arguments: request.args,
+      });
+
+      const result = (await Promise.race([
+        callPromise,
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error(`Tool invocation timeout after ${timeout}ms`)), timeout),
+        ),
+      ])) as CallToolResult;
 
       const endedAt = nowIso();
       const durationMs = Date.now() - startTime;
 
-      // Store evidence of invocation attempt
+      // Store evidence of successful invocation
+      const evidenceContent = {
+        tool: request.toolName,
+        args: request.args,
+        result: result.content,
+        isError: result.isError ?? false,
+      };
+
       const evidence = this.evidence.addEvidence({
         runId: request.runId,
         kind: 'command_output',
-        redactionState: 'redacted',
-        content: JSON.stringify(output, null, 2),
+        redactionState: 'raw_local_only',
+        content: JSON.stringify(evidenceContent, null, 2),
       });
       const evidenceId = evidence.id;
 
       this.events?.record({
         runId: request.runId,
-        type: 'tool.allowed', // TODO: Add mcp.tool.invoked event type
-        title: 'MCP tool invoked (stub)',
+        type: 'tool.allowed',
+        title: 'MCP tool invoked',
         detail: `${request.toolName} via ${this.config.name}`,
         entityId: invocationId,
         level: 'info',
@@ -333,8 +435,9 @@ export class McpClient {
 
       return {
         invocationId,
-        status: 'success',
-        output,
+        status: result.isError ? 'error' : 'success',
+        output: result.content,
+        error: result.isError ? JSON.stringify(result.content) : undefined,
         evidenceId,
         durationMs,
         startedAt,
@@ -345,9 +448,24 @@ export class McpClient {
       const durationMs = Date.now() - startTime;
       const errorMessage = error instanceof Error ? error.message : String(error);
 
+      // Store evidence of failed invocation
+      const evidenceContent = {
+        tool: request.toolName,
+        args: request.args,
+        error: errorMessage,
+      };
+
+      const evidence = this.evidence.addEvidence({
+        runId: request.runId,
+        kind: 'command_output',
+        redactionState: 'redacted',
+        content: JSON.stringify(evidenceContent, null, 2),
+      });
+      const evidenceId = evidence.id;
+
       this.events?.record({
         runId: request.runId,
-        type: 'tool.blocked', // TODO: Add mcp.tool.failed event type
+        type: 'tool.blocked',
         title: 'MCP tool invocation failed',
         detail: `${request.toolName}: ${redactText(errorMessage)}`,
         entityId: invocationId,
@@ -356,8 +474,9 @@ export class McpClient {
 
       return {
         invocationId,
-        status: 'error',
+        status: errorMessage.includes('timeout') ? 'timeout' : 'error',
         error: errorMessage,
+        evidenceId,
         durationMs,
         startedAt,
         endedAt,

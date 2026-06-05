@@ -2675,6 +2675,14 @@ export const OPERATOR_CONSOLE_JS = `(() => {
     busy: false
   };
 
+  const progressSocket = {
+    ws: null,
+    runId: '',
+    connected: false,
+    reconnectTimer: 0,
+    refreshTimer: 0
+  };
+
   const workerPoolPresets = {
     mock: [
       { name: 'mock-worker', type: 'mock', maxRunning: 1, priority: 0 }
@@ -4372,7 +4380,7 @@ export const OPERATOR_CONSOLE_JS = `(() => {
   refreshPocTemplates();
   refreshRuns();
   window.setInterval(() => {
-    if (state.activeRunId && !state.busy) {
+    if (state.activeRunId && !state.busy && !progressSocket.connected) {
       refreshProgress();
     }
   }, 4000);
@@ -4437,6 +4445,7 @@ export const OPERATOR_CONSOLE_JS = `(() => {
       refreshProgramScopeImports();
       refreshDomainSkills();
       refreshPocTemplates();
+      syncProgressSocket();
       refreshRuns();
     });
 
@@ -4883,6 +4892,7 @@ export const OPERATOR_CONSOLE_JS = `(() => {
         state.activeRunId = runs[0] ? runs[0].id : '';
       }
       renderRunList();
+      syncProgressSocket();
       await refreshProgress();
     };
     if (state.busy) {
@@ -4935,6 +4945,107 @@ export const OPERATOR_CONSOLE_JS = `(() => {
       api('/runs/' + encodeURIComponent(runId) + '/runtime-operations-workbench')
     ]);
     renderRunDetails(results[0], results[1], results[2], results[3], results[4], results[5], results[6], results[7], results[8], results[9], results[10], results[11], results[12], results[13], results[14], results[15], results[16], results[17], results[18], results[19], results[20], results[21], results[22], results[23], results[24], results[25], results[26], results[27], results[28], results[29], results[30], results[31], results[32], results[33]);
+  }
+
+  function syncProgressSocket() {
+    if (!state.token || !state.activeRunId || typeof WebSocket === 'undefined') {
+      closeProgressSocket();
+      return;
+    }
+
+    if (
+      progressSocket.ws &&
+      progressSocket.runId === state.activeRunId &&
+      (progressSocket.ws.readyState === WebSocket.OPEN || progressSocket.ws.readyState === WebSocket.CONNECTING)
+    ) {
+      return;
+    }
+
+    closeProgressSocket();
+
+    const runId = state.activeRunId;
+    const ws = new WebSocket(buildProgressSocketUrl(runId));
+    progressSocket.ws = ws;
+    progressSocket.runId = runId;
+
+    ws.onopen = () => {
+      progressSocket.connected = true;
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const message = JSON.parse(event.data);
+        if (message.type === 'connection.established') {
+          return;
+        }
+        if (message.runId === state.activeRunId) {
+          scheduleProgressRefresh();
+        }
+      } catch (error) {
+        console.warn('Progress event could not be parsed.', error);
+      }
+    };
+
+    ws.onerror = () => {
+      progressSocket.connected = false;
+    };
+
+    ws.onclose = () => {
+      if (progressSocket.ws !== ws) {
+        return;
+      }
+      progressSocket.connected = false;
+      progressSocket.ws = null;
+      if (state.token && state.activeRunId === runId) {
+        progressSocket.reconnectTimer = window.setTimeout(() => {
+          progressSocket.reconnectTimer = 0;
+          syncProgressSocket();
+        }, 3000);
+      }
+    };
+  }
+
+  function scheduleProgressRefresh(delayMs = 150) {
+    if (progressSocket.refreshTimer) {
+      window.clearTimeout(progressSocket.refreshTimer);
+    }
+    progressSocket.refreshTimer = window.setTimeout(() => {
+      progressSocket.refreshTimer = 0;
+      if (!state.activeRunId || state.busy) {
+        return;
+      }
+      refreshProgress().catch((error) => showMessage(error.message, true));
+    }, delayMs);
+  }
+
+  function closeProgressSocket() {
+    if (progressSocket.reconnectTimer) {
+      window.clearTimeout(progressSocket.reconnectTimer);
+      progressSocket.reconnectTimer = 0;
+    }
+    if (progressSocket.refreshTimer) {
+      window.clearTimeout(progressSocket.refreshTimer);
+      progressSocket.refreshTimer = 0;
+    }
+    const ws = progressSocket.ws;
+    progressSocket.ws = null;
+    progressSocket.runId = '';
+    progressSocket.connected = false;
+    if (ws) {
+      ws.onopen = null;
+      ws.onmessage = null;
+      ws.onerror = null;
+      ws.onclose = null;
+      if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+        ws.close(1000, 'Run subscription changed');
+      }
+    }
+  }
+
+  function buildProgressSocketUrl(runId) {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const params = new URLSearchParams({ runId, token: state.token });
+    return protocol + '//' + window.location.host + '/ws/progress?' + params.toString();
   }
 
   async function refreshReview() {
@@ -5735,6 +5846,7 @@ export const OPERATOR_CONSOLE_JS = `(() => {
         renderConnectorPlanPreview(null);
         renderToolPackPlanPreview(null);
         renderToolPlanPreview(null);
+        syncProgressSocket();
         refreshProgress().catch((error) => showMessage(error.message, true));
       });
       const title = document.createElement('strong');
