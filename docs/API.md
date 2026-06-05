@@ -160,6 +160,186 @@ Returns a compact progress summary for UI status bars and run dashboards.
 
 Current phases are `bootstrapping`, `reasoning`, `queued`, `exploring`, `awaiting_approval`, `completed`, and `stopped`.
 
+## WebSocket /ws/progress
+
+Establishes a WebSocket connection for real-time progress updates across all runs or a specific run. This is the live event stream for desktop clients, Operator Console dashboards, and CLI watchers.
+
+### Connection
+
+```
+ws://127.0.0.1:4317/ws/progress
+ws://127.0.0.1:4317/ws/progress?runId=run_x
+```
+
+### Authentication
+
+WebSocket connections require authentication via one of:
+
+**Query parameter:**
+```
+ws://127.0.0.1:4317/ws/progress?token=<PLATFORM_API_TOKEN>
+```
+
+**Sec-WebSocket-Protocol header:**
+```
+Sec-WebSocket-Protocol: bearer.<base64_token>
+```
+
+Where `<base64_token>` is the URL-safe base64-encoded platform API token.
+
+**Example with wscat:**
+```bash
+wscat -c "ws://127.0.0.1:4317/ws/progress?token=$PLATFORM_API_TOKEN"
+```
+
+**Example with JavaScript:**
+```javascript
+const token = 'your-platform-api-token';
+const ws = new WebSocket(`ws://127.0.0.1:4317/ws/progress?token=${token}`);
+
+ws.onmessage = (event) => {
+  const update = JSON.parse(event.data);
+  console.log('Progress update:', update);
+};
+```
+
+### Filtering by Run
+
+To receive updates for only a specific run, add the `runId` query parameter:
+
+```
+ws://127.0.0.1:4317/ws/progress?runId=run_x&token=<token>
+```
+
+Without `runId`, the client receives progress updates for all active runs.
+
+### Event Format
+
+The server sends JSON messages for every significant run state change:
+
+```json
+{
+  "type": "progress",
+  "runId": "run_x",
+  "timestamp": "2026-06-05T12:34:56.789Z",
+  "data": {
+    "runId": "run_x",
+    "status": "active",
+    "phase": "exploring",
+    "counts": {
+      "facts": 5,
+      "hints": 2,
+      "intents": { "total": 3, "open": 1, "claimed": 1, "released": 0, "concluded": 1 },
+      "evidence": 2,
+      "findings": 1,
+      "approvals": { "total": 1, "pending": 1, "approved": 0, "rejected": 0 },
+      "tools": { "total": 3, "allowed": 2, "blocked": 0, "approvalRequired": 1 },
+      "reports": 0
+    },
+    "lastEvent": { "type": "tool.blocked", "title": "Tool execution blocked" }
+  }
+}
+```
+
+### Event Types
+
+Progress events are sent when:
+
+- A run is created
+- A dispatcher tick completes
+- An intent state changes (open → claimed → concluded/released)
+- Evidence is added
+- A finding is created or validated
+- An approval is requested, approved, or rejected
+- A tool is invoked, blocked, or requires approval
+- A report is generated
+- A run export is created
+- The run phase changes
+
+### Connection Lifecycle
+
+**On connect:**
+The server immediately sends the current progress state for all matching runs (or the specific run if `runId` was provided).
+
+**During connection:**
+The server pushes a progress update message every time run state changes.
+
+**Heartbeat:**
+The server sends periodic ping frames. Clients should respond with pong frames to keep the connection alive.
+
+**On disconnect:**
+The server cleans up the subscription. Clients can reconnect at any time and will receive the latest progress state.
+
+### Error Handling
+
+If authentication fails, the server closes the connection with:
+
+```json
+{
+  "type": "error",
+  "error": "Authentication required"
+}
+```
+
+WebSocket close codes:
+- `1000`: Normal closure
+- `1008`: Policy violation (authentication failure)
+- `1011`: Server error
+
+### Integration Examples
+
+**CLI watcher:**
+```bash
+# Watch all runs
+wscat -c "ws://127.0.0.1:4317/ws/progress?token=$PLATFORM_API_TOKEN"
+
+# Watch specific run
+wscat -c "ws://127.0.0.1:4317/ws/progress?runId=run_x&token=$PLATFORM_API_TOKEN"
+```
+
+**Desktop dashboard:**
+```javascript
+class ProgressMonitor {
+  constructor(token, runId = null) {
+    const url = new URL('ws://127.0.0.1:4317/ws/progress');
+    url.searchParams.set('token', token);
+    if (runId) url.searchParams.set('runId', runId);
+    
+    this.ws = new WebSocket(url.toString());
+    this.ws.onmessage = (event) => this.handleUpdate(JSON.parse(event.data));
+    this.ws.onerror = (error) => console.error('WebSocket error:', error);
+    this.ws.onclose = () => this.reconnect();
+  }
+  
+  handleUpdate(update) {
+    if (update.type === 'progress') {
+      this.updateUI(update.data);
+    }
+  }
+  
+  updateUI(progress) {
+    // Update dashboard with latest counts and phase
+    document.getElementById('phase').textContent = progress.phase;
+    document.getElementById('evidence-count').textContent = progress.counts.evidence;
+    document.getElementById('findings-count').textContent = progress.counts.findings;
+  }
+  
+  reconnect() {
+    setTimeout(() => new ProgressMonitor(this.token, this.runId), 5000);
+  }
+}
+
+// Start monitoring
+const monitor = new ProgressMonitor(PLATFORM_API_TOKEN, 'run_x');
+```
+
+**Operator Console integration:**
+The local Operator Console at `http://127.0.0.1:4317/app` uses this WebSocket endpoint to provide live run status updates without polling `GET /runs/{id}/progress`.
+
+### Read-Only Contract
+
+This endpoint is read-only. It does not dispatch Workers, execute tools, approve actions, mutate run state, or write evidence. It only broadcasts the current progress summary derived from existing run events and graph state.
+
 ## GET /runs/{id}/mission-control
 
 Returns the run-level Mission Control read model. It is the commercial operator surface for "what is happening, why is this the next move, what is blocked, and what has to pass before delivery." It joins progress, Search Plan, Agent Workbench, Tool Ecosystem Workbench, Local Execution Node, Local Runner Workbench, Evidence Quality, Delivery Readiness, Agent Harness, and Reference Benchmark signals.

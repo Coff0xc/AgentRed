@@ -25,8 +25,15 @@ test('WebSocket real-time progress push broadcasts run events to subscribers', a
     const run = platform.graph.createRun({
       target: 'https://example.com',
       goal: 'Test WebSocket push',
-      scopePolicy: { allowedHosts: ['example.com'], deniedHosts: [] },
-      workerPool: { type: 'mock', models: [] },
+      scopePolicy: {
+        allowedAssets: ['https://example.com'],
+        deniedAssets: [],
+        allowedMethods: ['GET', 'POST'],
+        destructiveAllowed: false,
+        credentialRules: { allowVaultReferencesOnly: false },
+        rateLimits: {},
+      },
+      workerPool: [{ name: 'mock', type: 'mock', maxRunning: 1, priority: 1 }],
     });
 
     // Extract port from URL
@@ -64,9 +71,9 @@ test('WebSocket real-time progress push broadcasts run events to subscribers', a
           // This should trigger a broadcast
           platform.graph.addFact({
             runId: run.id,
-            description: 'Test fact for WebSocket broadcast',
-            from: [],
-            confidence: 'high',
+            statement: 'Test fact for WebSocket broadcast',
+            evidenceIds: [],
+            createdBy: 'test',
           });
         }, 100);
       });
@@ -136,8 +143,15 @@ test('WebSocket server rejects connections without authentication token', async 
     const run = platform.graph.createRun({
       target: 'https://example.com',
       goal: 'Test auth',
-      scopePolicy: { allowedHosts: ['example.com'], deniedHosts: [] },
-      workerPool: { type: 'mock', models: [] },
+      scopePolicy: {
+        allowedAssets: ['https://example.com'],
+        deniedAssets: [],
+        allowedMethods: ['GET'],
+        destructiveAllowed: false,
+        credentialRules: { allowVaultReferencesOnly: false },
+        rateLimits: {},
+      },
+      workerPool: [{ name: 'mock', type: 'mock', maxRunning: 1, priority: 1 }],
     });
 
     const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/progress?runId=${run.id}`);
@@ -175,8 +189,15 @@ test('WebSocket server handles multiple concurrent subscribers', async () => {
     const run = platform.graph.createRun({
       target: 'https://example.com',
       goal: 'Test multiple subscribers',
-      scopePolicy: { allowedHosts: ['example.com'], deniedHosts: [] },
-      workerPool: { type: 'mock', models: [] },
+      scopePolicy: {
+        allowedAssets: ['https://example.com'],
+        deniedAssets: [],
+        allowedMethods: ['GET'],
+        destructiveAllowed: false,
+        credentialRules: { allowVaultReferencesOnly: false },
+        rateLimits: {},
+      },
+      workerPool: [{ name: 'mock', type: 'mock', maxRunning: 1, priority: 1 }],
     });
 
     const port = new URL(api.url).port;
@@ -201,9 +222,9 @@ test('WebSocket server handles multiple concurrent subscribers', async () => {
             setTimeout(() => {
               platform.graph.addFact({
                 runId: run.id,
-                description: 'Broadcast to all clients',
-                from: [],
-                confidence: 'high',
+                statement: 'Broadcast to all clients',
+                evidenceIds: [],
+                createdBy: 'test',
               });
             }, 100);
           }
@@ -256,17 +277,24 @@ test('WebSocket broadcast failures do not affect RunEvent persistence', async ()
     const run = platform.graph.createRun({
       target: 'https://example.com',
       goal: 'Test broadcast failure handling',
-      scopePolicy: { allowedHosts: ['example.com'], deniedHosts: [] },
-      workerPool: { type: 'mock', models: [] },
+      scopePolicy: {
+        allowedAssets: ['https://example.com'],
+        deniedAssets: [],
+        allowedMethods: ['GET'],
+        destructiveAllowed: false,
+        credentialRules: { allowVaultReferencesOnly: false },
+        rateLimits: {},
+      },
+      workerPool: [{ name: 'mock', type: 'mock', maxRunning: 1, priority: 1 }],
     });
 
     // Create a fact (which triggers event recording and broadcast)
     // Even if broadcast fails, the event should be persisted
     const fact = platform.graph.addFact({
       runId: run.id,
-      description: 'Fact should be persisted even if broadcast fails',
-      from: [],
-      confidence: 'high',
+      statement: 'Fact should be persisted even if broadcast fails',
+      evidenceIds: [],
+      createdBy: 'test',
     });
 
     // Verify the fact was created
