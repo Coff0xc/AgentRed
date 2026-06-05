@@ -174,6 +174,50 @@ test('WebSocket server rejects connections without authentication token', async 
   }
 });
 
+test('WebSocket server rejects connections with invalid authentication token', async () => {
+  const platform: Platform = createPlatform({ databasePath: undefined });
+  const api: ApiHandle = await startApiServer(platform, {
+    port: 0,
+    authToken: 'test-token',
+    enableWebSocket: true,
+  });
+
+  try {
+    const port = new URL(api.url).port;
+    const run = platform.graph.createRun({
+      target: 'https://example.com',
+      goal: 'Test invalid auth',
+      scopePolicy: {
+        allowedAssets: ['https://example.com'],
+        deniedAssets: [],
+        allowedMethods: ['GET'],
+        destructiveAllowed: false,
+        credentialRules: { allowVaultReferencesOnly: false },
+        rateLimits: { requestsPerMinute: 60 },
+      },
+      workerPool: [{ name: 'mock', type: 'mock', maxRunning: 1, priority: 1 }],
+    });
+
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/progress?runId=${run.id}&token=wrong-token`);
+
+    await new Promise<void>((resolve, reject) => {
+      ws.on('close', (code, reason) => {
+        assert.strictEqual(code, 1008, 'Should close with policy violation code');
+        assert.match(reason.toString(), /invalid/i, 'Reason should mention invalid token');
+        resolve();
+      });
+
+      ws.on('error', () => {
+        // Expected - connection will be rejected
+      });
+
+      setTimeout(() => reject(new Error('Test timeout')), 3000);
+    });
+  } finally {
+    await api.close();
+  }
+});
+
 test('WebSocket server handles multiple concurrent subscribers', async () => {
   const platform: Platform = createPlatform({ databasePath: undefined });
   const api: ApiHandle = await startApiServer(platform, {

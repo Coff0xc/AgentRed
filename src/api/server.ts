@@ -71,6 +71,7 @@ export async function startApiServer(
   if (options.enableWebSocket !== false) {
     wsServer = new ProgressWebSocketServer({
       server,
+      authToken,
       path: '/ws/progress',
       heartbeatIntervalMs: 30_000,
       idleTimeoutMs: 1_800_000,

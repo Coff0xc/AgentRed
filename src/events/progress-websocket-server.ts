@@ -13,6 +13,7 @@ export interface ProgressUpdate {
 
 export interface ProgressWebSocketServerConfig {
   server: Server;
+  authToken?: string;
   path?: string;
   heartbeatIntervalMs?: number;
   idleTimeoutMs?: number;
@@ -50,9 +51,11 @@ export class ProgressWebSocketServer {
   private readonly heartbeatIntervalMs: number;
   private readonly idleTimeoutMs: number;
   private readonly path: string;
+  private readonly authToken?: string;
 
   constructor(config: ProgressWebSocketServerConfig) {
     this.path = config.path ?? '/ws/progress';
+    this.authToken = config.authToken;
     this.heartbeatIntervalMs = config.heartbeatIntervalMs ?? 30_000; // 30s
     this.idleTimeoutMs = config.idleTimeoutMs ?? 1_800_000; // 30min
 
@@ -70,7 +73,7 @@ export class ProgressWebSocketServer {
   private handleConnection(ws: WebSocket, req: IncomingMessage): void {
     const url = new URL(req.url!, `http://${req.headers.host}`);
     const runId = url.searchParams.get('runId');
-    const token = url.searchParams.get('token') ?? req.headers['x-platform-token'] as string;
+    const token = extractPresentedToken(url, req);
 
     // Validate required parameters
     if (!runId) {
@@ -78,14 +81,15 @@ export class ProgressWebSocketServer {
       return;
     }
 
-    if (!token) {
+    if (this.authToken && !token) {
       ws.close(1008, 'Missing authentication token');
       return;
     }
 
-    // Note: Token validation should be done by the caller before creating the WebSocket server
-    // or by passing a token validator function. For now, we trust that the HTTP server
-    // has already authenticated the request.
+    if (this.authToken && token !== this.authToken) {
+      ws.close(1008, 'Invalid authentication token');
+      return;
+    }
 
     // Subscribe to run progress
     if (!this.subscriptions.has(runId)) {
@@ -271,4 +275,24 @@ export class ProgressWebSocketServer {
     this.subscriptions.clear();
     this.wss.close();
   }
+}
+
+function extractPresentedToken(url: URL, req: IncomingMessage): string | undefined {
+  const queryToken = url.searchParams.get('token')?.trim();
+  if (queryToken) {
+    return queryToken;
+  }
+
+  const headerToken = headerValue(req.headers['x-platform-token'])?.trim();
+  if (headerToken) {
+    return headerToken;
+  }
+
+  const authorization = headerValue(req.headers.authorization)?.trim();
+  const bearer = authorization?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
+  return bearer || undefined;
+}
+
+function headerValue(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
 }
