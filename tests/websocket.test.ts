@@ -31,7 +31,7 @@ test('WebSocket real-time progress push broadcasts run events to subscribers', a
         allowedMethods: ['GET', 'POST'],
         destructiveAllowed: false,
         credentialRules: { allowVaultReferencesOnly: false },
-        rateLimits: {},
+        rateLimits: { requestsPerMinute: 60 },
       },
       workerPool: [{ name: 'mock', type: 'mock', maxRunning: 1, priority: 1 }],
     });
@@ -149,7 +149,7 @@ test('WebSocket server rejects connections without authentication token', async 
         allowedMethods: ['GET'],
         destructiveAllowed: false,
         credentialRules: { allowVaultReferencesOnly: false },
-        rateLimits: {},
+        rateLimits: { requestsPerMinute: 60 },
       },
       workerPool: [{ name: 'mock', type: 'mock', maxRunning: 1, priority: 1 }],
     });
@@ -195,7 +195,7 @@ test('WebSocket server handles multiple concurrent subscribers', async () => {
         allowedMethods: ['GET'],
         destructiveAllowed: false,
         credentialRules: { allowVaultReferencesOnly: false },
-        rateLimits: {},
+        rateLimits: { requestsPerMinute: 60 },
       },
       workerPool: [{ name: 'mock', type: 'mock', maxRunning: 1, priority: 1 }],
     });
@@ -283,7 +283,7 @@ test('WebSocket broadcast failures do not affect RunEvent persistence', async ()
         allowedMethods: ['GET'],
         destructiveAllowed: false,
         credentialRules: { allowVaultReferencesOnly: false },
-        rateLimits: {},
+        rateLimits: { requestsPerMinute: 60 },
       },
       workerPool: [{ name: 'mock', type: 'mock', maxRunning: 1, priority: 1 }],
     });
