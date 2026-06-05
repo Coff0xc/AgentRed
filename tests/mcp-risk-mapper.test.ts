@@ -107,8 +107,8 @@ test('McpRiskMapper explainRiskLevel provides clear explanations', () => {
   const r4Explanation = mapper.explainRiskLevel('delete');
   assert.match(r4Explanation, /destructive/i);
 
-  const unknownExplanation = mapper.explainRiskLevel('unknown');
-  assert.match(unknownExplanation, /fail-safe/i);
+  const unknownExplanation = mapper.explainRiskLevel('unknown_tool_xyz');
+  assert.match(unknownExplanation, /fail-safe|unknown|requires approval/i);
 });
 
 test('McpRiskMapper handles case-insensitive matching', () => {

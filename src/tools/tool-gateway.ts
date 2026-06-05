@@ -26,6 +26,7 @@ import type { OastService } from '../oast/oast-service.js';
 import type { ScannerResultImportService } from '../scanners/scanner-result-import-service.js';
 import type { RunEventService } from '../events/run-event-service.js';
 import type { ObservabilityService } from '../observability/observability-service.js';
+import type { McpExecutionService } from '../connectors/mcp-execution-service.js';
 import { redactArgs, redactHeaders, redactText, redactUrl } from '../security/redaction.js';
 import { evaluateScope } from '../scope/policy.js';
 import type { PlatformStore } from '../storage/store.js';
@@ -185,6 +186,7 @@ export class ToolGateway {
     private readonly accessReviews?: AccessReviewService,
     private readonly oast?: OastService,
     private readonly scannerResults?: ScannerResultImportService,
+    private readonly mcp?: McpExecutionService,
   ) {}
 
   catalog(): ToolCatalogEntry[] {
@@ -485,6 +487,9 @@ export class ToolGateway {
     if (input.tool === 'oast.record_callback') {
       return this.recordOastCallback(input, startedMs);
     }
+    if (input.tool === 'mcp.invoke') {
+      return this.invokeMcpTool(input, startedMs);
+    }
 
     if (input.tool === 'browser.navigate') {
       if (!this.browserSessions) {
@@ -734,6 +739,40 @@ export class ToolGateway {
     }
     if (input.tool === 'oast.record_callback' && !this.oast) {
       return { gate: 'service.oast', status: 'blocked', reason: 'OAST service is not configured' };
+    }
+    if (input.tool === 'mcp.invoke') {
+      if (!this.mcp) {
+        return { gate: 'service.mcp', status: 'blocked', reason: 'MCP execution service is not configured' };
+      }
+      const connectionId = optionalArgText(input.args.connectionId);
+      const toolName = optionalArgText(input.args.toolName);
+      if (!connectionId || !toolName) {
+        return {
+          gate: 'mcp.args',
+          status: 'blocked',
+          reason: 'MCP invocation requires connectionId and toolName',
+        };
+      }
+      const connection = this.mcp.getConnection(connectionId);
+      if (!connection) {
+        return {
+          gate: 'mcp.connection',
+          status: 'blocked',
+          reason: `MCP connection not found: ${connectionId}`,
+        };
+      }
+      if (!connection.isReady()) {
+        return {
+          gate: 'mcp.connection',
+          status: 'blocked',
+          reason: `MCP connection ${connectionId} is not ready: ${connection.getState().status}`,
+        };
+      }
+      return {
+        gate: 'mcp.connection',
+        status: 'pass',
+        reason: `MCP connection ${connectionId} is ready and tool ${toolName} will be validated at invocation time`,
+      };
     }
     if (input.tool === 'finding.propose') {
       if (!this.findings) {
@@ -1222,6 +1261,110 @@ export class ToolGateway {
       const reason = error instanceof Error ? error.message : String(error);
       const invocation = this.recordInvocation(input, 'blocked', reason, input.approvalId);
       return this.finishTool(input, { status: 'blocked', invocationId: invocation.id, reason }, startedMs, { reason });
+    }
+  }
+
+  private async invokeMcpTool(input: ToolInvokeInput, startedMs: number): Promise<ToolInvokeResult> {
+    if (!this.mcp) {
+      const invocation = this.recordInvocation(input, 'blocked', 'MCP execution service is not configured', input.approvalId);
+      return this.finishTool(
+        input,
+        { status: 'blocked', invocationId: invocation.id, reason: invocation.reason ?? 'MCP execution service is not configured' },
+        startedMs,
+        { reason: invocation.reason },
+      );
+    }
+
+    // Parse required arguments
+    const connectionId = optionalArgText(input.args.connectionId);
+    const toolName = optionalArgText(input.args.toolName);
+
+    if (!connectionId || !toolName) {
+      const reason = 'MCP invocation requires connectionId and toolName';
+      const invocation = this.recordInvocation(input, 'blocked', reason, input.approvalId);
+      return this.finishTool(input, { status: 'blocked', invocationId: invocation.id, reason }, startedMs, { reason });
+    }
+
+    // Get and validate MCP connection
+    const connection = this.mcp.getConnection(connectionId);
+    if (!connection) {
+      const reason = `MCP connection not found: ${connectionId}`;
+      const invocation = this.recordInvocation(input, 'blocked', reason, input.approvalId);
+      return this.finishTool(input, { status: 'blocked', invocationId: invocation.id, reason }, startedMs, { reason });
+    }
+
+    if (!connection.isReady()) {
+      const reason = `MCP connection ${connectionId} is not ready: ${connection.getState().status}`;
+      const invocation = this.recordInvocation(input, 'blocked', reason, input.approvalId);
+      return this.finishTool(input, { status: 'blocked', invocationId: invocation.id, reason }, startedMs, { reason });
+    }
+
+    // Parse tool arguments
+    const toolArgs = typeof input.args.args === 'object' && input.args.args !== null && !Array.isArray(input.args.args)
+      ? (input.args.args as Record<string, unknown>)
+      : {};
+
+    // Record allowed invocation
+    const invocation = this.recordInvocation(input, 'allowed', undefined, input.approvalId, `stdout://${newId('tool')}`);
+
+    try {
+      // Invoke MCP tool through the connection
+      const timeoutMs = typeof input.args.timeoutMs === 'number' ? input.args.timeoutMs : 60_000;
+      const result = await connection.invokeTool({
+        runId: input.runId,
+        connectionId,
+        toolName,
+        args: toolArgs,
+        riskLevel: input.riskLevel,
+        approvalId: input.approvalId,
+        timeoutMs,
+      });
+
+      this.completeInvocation(invocation.id);
+
+      return this.finishTool(
+        input,
+        {
+          status: 'allowed',
+          invocationId: invocation.id,
+          stdoutRef: invocation.stdoutRef ?? '',
+          evidenceId: result.evidenceId,
+        },
+        startedMs,
+        {
+          mcpConnectionId: connectionId,
+          mcpToolName: toolName,
+          mcpInvocationId: result.invocationId,
+          mcpStatus: result.status,
+          evidenceId: result.evidenceId,
+          durationMs: result.durationMs,
+        },
+      );
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+
+      // Update invocation status to blocked
+      this.store.state.toolInvocations[invocation.id].status = 'blocked';
+      this.store.state.toolInvocations[invocation.id].reason = reason;
+      this.store.state.toolInvocations[invocation.id].endedAt = nowIso();
+
+      this.events?.record({
+        runId: input.runId,
+        type: 'tool.blocked',
+        title: 'MCP tool invocation failed',
+        detail: `${toolName} via ${connectionId}: ${redactText(reason)}`,
+        level: 'error',
+        entityId: invocation.id,
+      });
+
+      this.store.commit();
+
+      return this.finishTool(
+        input,
+        { status: 'blocked', invocationId: invocation.id, reason },
+        startedMs,
+        { mcpConnectionId: connectionId, mcpToolName: toolName, reason },
+      );
     }
   }
 
@@ -2272,13 +2415,16 @@ function evidencePreview(tool: string, scannerTemplate?: ToolTemplateProfile): T
     tool === 'shell.run_sandboxed' ||
     tool === 'credential.use_placeholder' ||
     tool === 'access.compare_evidence' ||
-    tool === 'oast.record_callback'
+    tool === 'oast.record_callback' ||
+    tool === 'mcp.invoke'
   ) {
     return {
       wouldProduce: true,
       kind: tool === 'oast.record_callback' ? 'oast_callback' : 'command_output',
       redactionState: 'redacted',
-      policy: 'Execution output is stored as redacted local evidence',
+      policy: tool === 'mcp.invoke'
+        ? 'MCP tool output is stored as raw local-only evidence initially, then redacted if needed'
+        : 'Execution output is stored as redacted local evidence',
     };
   }
   if (tool === 'finding.propose') {
@@ -3506,7 +3652,8 @@ function isSupportedTool(tool: string): boolean {
     tool === 'shell.run_sandboxed' ||
     tool === 'credential.use_placeholder' ||
     tool === 'access.compare_evidence' ||
-    tool === 'finding.propose'
+    tool === 'finding.propose' ||
+    tool === 'mcp.invoke'
   );
 }
 
