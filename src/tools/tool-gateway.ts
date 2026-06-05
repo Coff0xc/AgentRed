@@ -1396,6 +1396,36 @@ export class ToolGateway {
         timeoutMs,
       });
 
+      if (result.status !== 'success') {
+        const reason = result.error ?? `MCP tool invocation ${result.status}`;
+        this.store.state.toolInvocations[invocation.id].status = 'blocked';
+        this.store.state.toolInvocations[invocation.id].reason = reason;
+        this.store.state.toolInvocations[invocation.id].endedAt = nowIso();
+        this.events?.record({
+          runId: input.runId,
+          type: 'tool.blocked',
+          title: 'MCP tool invocation failed',
+          detail: `${toolName} via ${connectionId}: ${redactText(reason)}`,
+          level: result.status === 'timeout' ? 'warning' : 'error',
+          entityId: invocation.id,
+        });
+        this.store.commit();
+        return this.finishTool(
+          effectiveInput,
+          { status: 'blocked', invocationId: invocation.id, reason },
+          startedMs,
+          {
+            mcpConnectionId: connectionId,
+            mcpToolName: toolName,
+            mcpInvocationId: result.invocationId,
+            mcpStatus: result.status,
+            evidenceId: result.evidenceId,
+            durationMs: result.durationMs,
+            reason,
+          },
+        );
+      }
+
       this.completeInvocation(invocation.id);
 
       return this.finishTool(

@@ -200,13 +200,7 @@ export class McpClient {
         this.transport.onerror = (error: Error) => {
           this.connectionState.status = 'error';
           this.connectionState.lastError = error.message;
-          this.events?.record({
-            runId: 'system',
-            type: 'run.created',
-            title: 'MCP transport error',
-            detail: redactText(error.message),
-            level: 'error',
-          });
+          this.recordSystemEvent('MCP transport error', redactText(error.message), 'error');
           originalOnError?.call(this.transport, error);
         };
 
@@ -214,13 +208,7 @@ export class McpClient {
         this.transport.onclose = () => {
           if (this.connectionState.status === 'connected') {
             this.connectionState.status = 'closed';
-            this.events?.record({
-              runId: 'system',
-              type: 'run.created',
-              title: 'MCP connection closed',
-              detail: `Connection to ${this.config.name} closed unexpectedly`,
-              level: 'warning',
-            });
+            this.recordSystemEvent('MCP connection closed', `Connection to ${this.config.name} closed unexpectedly`, 'warning');
           }
           originalOnClose?.call(this.transport);
         };
@@ -249,13 +237,11 @@ export class McpClient {
       this.connectionState.connectedAt = nowIso();
       this.connectionState.lastError = undefined;
 
-      this.events?.record({
-        runId: 'system',
-        type: 'run.created',
-        title: 'MCP connection established',
-        detail: `Connected to ${this.config.name} (${this.config.transport}), discovered ${this.connectionState.tools.length} tools`,
-        level: 'info',
-      });
+      this.recordSystemEvent(
+        'MCP connection established',
+        `Connected to ${this.config.name} (${this.config.transport}), discovered ${this.connectionState.tools.length} tools`,
+        'info',
+      );
 
       return this.connectionState;
     } catch (error) {
@@ -266,13 +252,7 @@ export class McpClient {
       // Clean up on failure
       await this.cleanup();
 
-      this.events?.record({
-        runId: 'system',
-        type: 'run.created',
-        title: 'MCP connection failed',
-        detail: redactText(this.connectionState.lastError),
-        level: 'error',
-      });
+      this.recordSystemEvent('MCP connection failed', redactText(this.connectionState.lastError), 'error');
 
       throw error;
     }
@@ -294,13 +274,7 @@ export class McpClient {
       }
     } catch (error) {
       // Best effort cleanup, log but don't throw
-      this.events?.record({
-        runId: 'system',
-        type: 'run.created',
-        title: 'MCP cleanup error',
-        detail: error instanceof Error ? error.message : String(error),
-        level: 'warning',
-      });
+      this.recordSystemEvent('MCP cleanup error', error instanceof Error ? error.message : String(error), 'warning');
     }
   }
 
@@ -319,13 +293,7 @@ export class McpClient {
       this.connectionState.status = 'closed';
       this.connectionState.tools = [];
 
-      this.events?.record({
-        runId: 'system',
-        type: 'run.created',
-        title: 'MCP connection closed',
-        detail: `Disconnected from ${this.config.name}`,
-        level: 'info',
-      });
+      this.recordSystemEvent('MCP connection closed', `Disconnected from ${this.config.name}`, 'info');
     } catch (error) {
       this.connectionState.status = 'error';
       this.connectionState.lastError = error instanceof Error ? error.message : String(error);
@@ -502,6 +470,23 @@ export class McpClient {
     return this.connectionState.status === 'connected';
   }
 
+  private recordSystemEvent(title: string, detail: string, level: 'info' | 'warning' | 'error'): void {
+    if (!this.events || !this.store.state.runs.system) {
+      return;
+    }
+    try {
+      this.events.record({
+        runId: 'system',
+        type: 'run.created',
+        title,
+        detail,
+        level,
+      });
+    } catch {
+      // MCP lifecycle logging must never mask connection or cleanup errors.
+    }
+  }
+
   /**
    * Reconnect to MCP server after connection loss.
    *
@@ -627,13 +612,11 @@ export class McpExecutionService {
           catalog.set(connectionId, tools);
         } catch (error) {
           // Log error but continue with other connections
-          this.events?.record({
-            runId: 'system',
-            type: 'run.created', // TODO: Add mcp.catalog_error event type
-            title: 'Failed to fetch MCP tool catalog',
-            detail: `Connection ${connectionId}: ${error instanceof Error ? error.message : String(error)}`,
-            level: 'error',
-          });
+          this.recordSystemEvent(
+            'Failed to fetch MCP tool catalog',
+            `Connection ${connectionId}: ${error instanceof Error ? error.message : String(error)}`,
+            'error',
+          );
         }
       }
     }
@@ -654,5 +637,22 @@ export class McpExecutionService {
     }
 
     return status;
+  }
+
+  private recordSystemEvent(title: string, detail: string, level: 'info' | 'warning' | 'error'): void {
+    if (!this.events || !this.store.state.runs.system) {
+      return;
+    }
+    try {
+      this.events.record({
+        runId: 'system',
+        type: 'run.created',
+        title,
+        detail,
+        level,
+      });
+    } catch {
+      // Catalog logging must not prevent other MCP connections from being returned.
+    }
   }
 }

@@ -378,6 +378,50 @@ test('Platform wires MCP service and ToolGateway enforces inferred MCP risk', as
   assert.equal(invocation?.riskLevel, 'R4');
 });
 
+test('MCP invocation errors are returned as blocked ToolGateway results', async () => {
+  const platform = createPlatform();
+  const run = platform.graph.createRun({
+    target: 'https://app.example.com',
+    goal: 'Validate MCP error handling',
+    scopePolicy: policy,
+    workerPool: [{ name: 'mock-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+  const fakeConnection = {
+    isReady: () => true,
+    getState: () => ({
+      status: 'connected',
+      tools: [{ name: 'query', description: 'Read-only query', estimatedRiskLevel: 'R1', requiresApproval: false }],
+    }),
+    invokeTool: async () => ({
+      invocationId: 'mcp_invocation_test',
+      status: 'error',
+      error: 'remote MCP failure',
+      evidenceId: 'evidence_mcp_failure',
+      durationMs: 5,
+      startedAt: new Date().toISOString(),
+      endedAt: new Date().toISOString(),
+    }),
+  };
+  (platform.mcp as unknown as { getConnection(id: string): typeof fakeConnection | undefined }).getConnection = (id: string) =>
+    id === 'local-mcp' ? fakeConnection : undefined;
+  (platform.mcp as unknown as { getToolMetadata(id: string, tool: string): unknown }).getToolMetadata = (id: string, tool: string) =>
+    id === 'local-mcp' && tool === 'query' ? fakeConnection.getState().tools[0] : undefined;
+
+  const result = await platform.tools.invoke({
+    runId: run.id,
+    tool: 'mcp.invoke',
+    target: 'https://app.example.com',
+    method: 'GET',
+    riskLevel: 'R1',
+    args: { connectionId: 'local-mcp', toolName: 'query', args: {} },
+  });
+
+  assert.equal(result.status, 'blocked');
+  assert.match(result.reason, /remote MCP failure/);
+  const invocation = Object.values(platform.store.state.toolInvocations).find((item) => item.tool === 'mcp.invoke');
+  assert.equal(invocation?.status, 'blocked');
+});
+
 test('R4 break-glass token is redacted from API responses, worker envelopes, and exports', async () => {
   const platform = createPlatform();
   const api = await startApiServer(platform, { port: 0, authToken: 'test-token' });
