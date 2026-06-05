@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { ProgressWebSocketServer } from '../events/progress-websocket-server.js';
 
 import type { Platform } from '../platform.js';
 import type { WorkerEnvelopePreviewTask } from '../dispatcher/dispatcher.js';
@@ -39,12 +40,13 @@ import { OPERATOR_CONSOLE_CSS, OPERATOR_CONSOLE_HTML, OPERATOR_CONSOLE_JS } from
 export interface ApiHandle {
   server: Server;
   url: string;
+  wsServer?: ProgressWebSocketServer;
   close(): Promise<void>;
 }
 
 export async function startApiServer(
   platform: Platform,
-  options: { port: number; host?: string; authToken?: string; unsafeAllowNoAuthLocalOnly?: boolean },
+  options: { port: number; host?: string; authToken?: string; unsafeAllowNoAuthLocalOnly?: boolean; enableWebSocket?: boolean },
 ): Promise<ApiHandle> {
   const host = options.host ?? '127.0.0.1';
   const authToken = normalizeAuthToken(options.authToken, host, Boolean(options.unsafeAllowNoAuthLocalOnly));
@@ -63,10 +65,29 @@ export async function startApiServer(
   if (!address || typeof address === 'string') {
     throw new Error('Unable to resolve API server address');
   }
+
+  // Create WebSocket server for real-time progress updates
+  let wsServer: ProgressWebSocketServer | undefined;
+  if (options.enableWebSocket !== false) {
+    wsServer = new ProgressWebSocketServer({
+      server,
+      path: '/ws/progress',
+      heartbeatIntervalMs: 30_000,
+      idleTimeoutMs: 1_800_000,
+    });
+    console.log('[API] WebSocket server enabled at /ws/progress');
+  }
+
   return {
     server,
     url: `http://${host}:${address.port}`,
-    close: () => new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve()))),
+    wsServer,
+    close: () => {
+      if (wsServer) {
+        wsServer.close();
+      }
+      return new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+    },
   };
 }
 

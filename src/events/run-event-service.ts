@@ -2,9 +2,13 @@ import { newId, nowIso } from '../domain/ids.js';
 import type { RunEvent, RunEventLevel, RunEventType, RunPhase, RunProgress } from '../domain/types.js';
 import { redactText } from '../security/redaction.js';
 import type { PlatformStore } from '../storage/store.js';
+import type { ProgressWebSocketServer } from './progress-websocket-server.js';
 
 export class RunEventService {
-  constructor(private readonly store: PlatformStore) {}
+  constructor(
+    private readonly store: PlatformStore,
+    private readonly wsServer?: ProgressWebSocketServer,
+  ) {}
 
   record(input: {
     runId: string;
@@ -29,6 +33,29 @@ export class RunEventService {
     };
     this.store.state.runEvents[event.id] = event;
     this.store.commit();
+
+    // Broadcast to WebSocket subscribers (non-blocking)
+    // Failures do not affect event persistence
+    if (this.wsServer) {
+      try {
+        this.wsServer.broadcast(input.runId, {
+          type: input.type,
+          runId: input.runId,
+          timestamp: event.createdAt,
+          data: {
+            id: event.id,
+            title: event.title,
+            detail: event.detail,
+            level: event.level,
+            entityId: event.entityId,
+          },
+        });
+      } catch (error) {
+        // WebSocket broadcast failures are logged but do not throw
+        console.error('[RunEventService] WebSocket broadcast failed:', error);
+      }
+    }
+
     return event;
   }
 

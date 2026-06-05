@@ -133,7 +133,7 @@ export interface CreatePlatformOptions {
 
 export function createPlatform(options: CreatePlatformOptions = {}): Platform {
   const store = options.databasePath ? new SqlitePlatformStore(options.databasePath) : new InMemoryPlatformStore();
-  const events = new RunEventService(store);
+  const events = new RunEventService(store, undefined); // wsServer will be set after API server starts
   const graph = new GraphServer(store, events);
   const approvals = new ApprovalService(store, events);
   const observability = new ObservabilityService(store);

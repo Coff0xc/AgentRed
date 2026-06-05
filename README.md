@@ -73,6 +73,7 @@ AgentRed 现在围绕这些目标建设。
 | 安全门禁 | `ScopePolicy`、allowlist、denylist、HTTP 方法限制、R0-R4 风险等级、审批、速率限制 |
 | 主动探测 | `web.param_probe`、认证端点发现、API 版本发现、Host header probe、基础 HTTP 探测 |
 | 本地 Runner | `browser.navigate` 默认 fetch controller，可选 Playwright controller，scope 阻断、截图 raw-local-only、DOM/console/network 脱敏入证据 |
+| 实时监控 | WebSocket 实时事件推送（延迟 <100ms）、自动降级到轮询、前端客户端自动重连 |
 | 外部扫描器 | typed scanner template、nuclei safe template 可用性、nuclei JSONL 自动导入 finding |
 | 证据中心 | 本地 evidence blob、SHA-256、脱敏状态、复核状态、evidence content API |
 | 访问控制测试 | credential reference、placeholder 使用、跨角色 evidence compare |
