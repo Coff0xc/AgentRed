@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, rmSync } from 'node:fs';
+import { copyFileSync, mkdirSync, rmSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { createServer, request as httpRequest, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
@@ -630,6 +630,7 @@ test('web.param_probe captures active parameter reflection and parser error sign
 
 test('ToolGateway executes sandboxed shell commands and records redacted output evidence', async () => {
   const platform = createPlatform();
+  const safeTool = createSafeToolScript('echo');
   const run = platform.graph.createRun({
     target: 'https://app.example.com',
     goal: 'Execute low-risk local tooling',
@@ -644,8 +645,8 @@ test('ToolGateway executes sandboxed shell commands and records redacted output 
     method: 'POST',
     riskLevel: 'R2',
     args: {
-      command: process.execPath,
-      args: ['-e', 'console.log("token=shell-secret"); console.error("stderr ok")'],
+      command: safeTool,
+      args: ['-e', 'console.log(process.argv[1]); console.error(process.argv[2])', 'token=shell-secret', 'stderr ok'],
       timeoutMs: 5_000,
     },
   });
@@ -659,6 +660,31 @@ test('ToolGateway executes sandboxed shell commands and records redacted output 
   assert.ok(evidenceContent.includes('[redacted]'));
   assert.ok(evidenceContent.includes('stderr ok'));
   assert.ok(!evidenceContent.includes('shell-secret'));
+});
+
+test('ToolGateway blocks generic interpreter commands for sandboxed shell execution', async () => {
+  const platform = createPlatform();
+  const run = platform.graph.createRun({
+    target: 'https://app.example.com',
+    goal: 'Block interpreter escape from local tooling',
+    scopePolicy: policy,
+    workerPool: [{ name: 'mock-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+
+  const result = await platform.tools.invoke({
+    runId: run.id,
+    tool: 'shell.run_sandboxed',
+    target: 'https://app.example.com',
+    method: 'POST',
+    riskLevel: 'R2',
+    args: {
+      command: process.execPath,
+      args: ['-e', 'console.log(process.env.PLATFORM_API_TOKEN || process.cwd())'],
+    },
+  });
+
+  assert.equal(result.status, 'blocked');
+  assert.match(result.reason, /not allowed/i);
 });
 
 test('ToolGateway blocks sandboxed shell commands outside the allowlist', async () => {
@@ -685,6 +711,7 @@ test('ToolGateway blocks sandboxed shell commands outside the allowlist', async 
 
 test('ToolGateway records timed-out sandboxed shell commands as evidence', async () => {
   const platform = createPlatform();
+  const safeTool = createSafeToolScript('timeout');
   const run = platform.graph.createRun({
     target: 'https://app.example.com',
     goal: 'Timeout local tooling',
@@ -699,7 +726,7 @@ test('ToolGateway records timed-out sandboxed shell commands as evidence', async
     method: 'POST',
     riskLevel: 'R2',
     args: {
-      command: process.execPath,
+      command: safeTool,
       args: ['-e', 'setTimeout(() => {}, 5000)'],
       timeoutMs: 50,
     },
@@ -4255,3 +4282,12 @@ test('SQLite-backed platform reloads the local graph state', () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+function createSafeToolScript(name: string): string {
+  const safeToolsDir = join(process.cwd(), '.local', 'safe-tools');
+  mkdirSync(safeToolsDir, { recursive: true });
+  const ext = process.platform === 'win32' ? '.exe' : '';
+  const toolPath = join(safeToolsDir, `agentred-safe-${name}${ext}`);
+  copyFileSync(process.execPath, toolPath);
+  return toolPath;
+}

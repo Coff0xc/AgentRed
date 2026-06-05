@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { resolve4, resolve6, resolveCname, resolveMx, resolveNs, resolveTxt } from 'node:dns/promises';
 import { spawn } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { connect as tlsConnect, type DetailedPeerCertificate } from 'node:tls';
 
 import { newId, nowIso } from '../domain/ids.js';
@@ -3553,9 +3553,13 @@ function parseConfidence(value: unknown): Confidence {
 }
 
 function isShellCommandAllowed(command: string): boolean {
-  return ['node', 'node.exe', 'npm', 'npm.cmd', 'npx', 'npx.cmd', 'python', 'python.exe', 'python3', 'python3.exe'].includes(
-    commandDisplayName(command),
-  );
+  const safeToolsDir = resolve(process.cwd(), '.local', 'safe-tools');
+  const commandPath = resolve(command);
+  if (commandPath !== safeToolsDir && !commandPath.startsWith(`${safeToolsDir}\\`) && !commandPath.startsWith(`${safeToolsDir}/`)) {
+    return false;
+  }
+  const displayName = commandDisplayName(command);
+  return /^agentred-safe-[a-z0-9_.-]+(?:\.(?:exe))?$/i.test(displayName);
 }
 
 function commandDisplayName(command: string): string {
@@ -3589,6 +3593,7 @@ function runSandboxProcess(
   return new Promise((resolve) => {
     const child = spawn(command, args, {
       cwd,
+      env: sandboxProcessEnv(),
       stdio: ['ignore', 'pipe', 'pipe'],
       shell: false,
     });
@@ -3623,6 +3628,17 @@ function runSandboxProcess(
       finish({ stdout, stderr, exitCode: code, timedOut });
     });
   });
+}
+
+function sandboxProcessEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const key of ['PATH', 'Path', 'PATHEXT', 'SystemRoot', 'WINDIR', 'TEMP', 'TMP', 'HOME', 'USERPROFILE']) {
+    const value = process.env[key];
+    if (value) {
+      env[key] = value;
+    }
+  }
+  return env;
 }
 
 function limitText(value: string, maxLength: number): { text: string; truncated: boolean } {
