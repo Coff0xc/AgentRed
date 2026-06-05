@@ -52,7 +52,9 @@ export class McpRiskMapper {
    * inferRiskLevel('unknown_tool') // => 'R3' (fail-safe default)
    */
   inferRiskLevel(toolName: string, toolDescription?: string): RiskLevel {
-    const combinedText = `${toolName} ${toolDescription || ''}`.toLowerCase();
+    const lowerName = toolName.toLowerCase();
+    const lowerDesc = (toolDescription || '').toLowerCase();
+    const combinedText = `${lowerName} ${lowerDesc}`;
 
     // Check R4 (destructive) first - highest priority
     if (this.matchesAnyPattern(combinedText, this.r4Patterns)) {
