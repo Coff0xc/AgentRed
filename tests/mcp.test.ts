@@ -250,7 +250,7 @@ test('McpClient error handling - records error events on connection failure', as
   assert.equal(state.retryCount, 1);
 
   // Check events were recorded
-  const eventList = events.list({ runId: 'system', limit: 100 });
+  const eventList = events.list('system');
   const errorEvents = eventList.filter((e) => e.level === 'error');
   assert.ok(errorEvents.length > 0);
 });
