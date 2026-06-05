@@ -162,40 +162,66 @@ Current phases are `bootstrapping`, `reasoning`, `queued`, `exploring`, `awaitin
 
 ## WebSocket /ws/progress
 
-Establishes a WebSocket connection for real-time progress updates across all runs or a specific run. This is the live event stream for desktop clients, Operator Console dashboards, and CLI watchers.
+Establishes a WebSocket connection for real-time progress updates for a specific run. This is the live event stream for desktop clients, Operator Console dashboards, and CLI watchers.
 
 ### Connection
 
 ```
-ws://127.0.0.1:4317/ws/progress
 ws://127.0.0.1:4317/ws/progress?runId=run_x
 ```
 
 ### Authentication
 
-WebSocket connections require authentication via one of:
+WebSocket connections require a valid `runId` query parameter and authentication via one of:
 
-**Query parameter:**
-```
-ws://127.0.0.1:4317/ws/progress?token=<PLATFORM_API_TOKEN>
+**Browser clients, preferred: Sec-WebSocket-Protocol**
+```javascript
+const token = 'your-platform-api-token';
+const encodedToken = btoa(unescape(encodeURIComponent(token)))
+  .replace(/\+/g, '-')
+  .replace(/\//g, '_')
+  .replace(/=+$/g, '');
+
+const ws = new WebSocket('ws://127.0.0.1:4317/ws/progress?runId=run_x', [
+  'agentred-progress',
+  `agentred-token.${encodedToken}`,
+]);
 ```
 
-**Sec-WebSocket-Protocol header:**
-```
-Sec-WebSocket-Protocol: bearer.<base64_token>
+The server selects only the fixed `agentred-progress` subprotocol during the handshake. The token-bearing subprotocol is used for authentication and is not echoed back as the selected protocol.
+
+**Node or CLI clients, preferred: authorization header**
+```javascript
+import WebSocket from 'ws';
+
+const ws = new WebSocket('ws://127.0.0.1:4317/ws/progress?runId=run_x', {
+  headers: { authorization: `Bearer ${process.env.PLATFORM_API_TOKEN}` },
+});
 ```
 
-Where `<base64_token>` is the URL-safe base64-encoded platform API token.
+**Query parameter, legacy compatibility only:**
+```
+ws://127.0.0.1:4317/ws/progress?runId=run_x&token=<PLATFORM_API_TOKEN>
+```
+
+Avoid query-token authentication for new clients because URLs are commonly captured by logs, proxies, browser history, and error telemetry.
 
 **Example with wscat:**
 ```bash
-wscat -c "ws://127.0.0.1:4317/ws/progress?token=$PLATFORM_API_TOKEN"
+wscat -c "ws://127.0.0.1:4317/ws/progress?runId=run_x" -H "Authorization: Bearer $PLATFORM_API_TOKEN"
 ```
 
 **Example with JavaScript:**
 ```javascript
 const token = 'your-platform-api-token';
-const ws = new WebSocket(`ws://127.0.0.1:4317/ws/progress?token=${token}`);
+const encodedToken = btoa(unescape(encodeURIComponent(token)))
+  .replace(/\+/g, '-')
+  .replace(/\//g, '_')
+  .replace(/=+$/g, '');
+const ws = new WebSocket('ws://127.0.0.1:4317/ws/progress?runId=run_x', [
+  'agentred-progress',
+  `agentred-token.${encodedToken}`,
+]);
 
 ws.onmessage = (event) => {
   const update = JSON.parse(event.data);
@@ -205,13 +231,11 @@ ws.onmessage = (event) => {
 
 ### Filtering by Run
 
-To receive updates for only a specific run, add the `runId` query parameter:
+To receive updates for a specific run, add the `runId` query parameter:
 
 ```
-ws://127.0.0.1:4317/ws/progress?runId=run_x&token=<token>
+ws://127.0.0.1:4317/ws/progress?runId=run_x
 ```
-
-Without `runId`, the client receives progress updates for all active runs.
 
 ### Event Format
 
@@ -290,22 +314,26 @@ WebSocket close codes:
 
 **CLI watcher:**
 ```bash
-# Watch all runs
-wscat -c "ws://127.0.0.1:4317/ws/progress?token=$PLATFORM_API_TOKEN"
-
 # Watch specific run
-wscat -c "ws://127.0.0.1:4317/ws/progress?runId=run_x&token=$PLATFORM_API_TOKEN"
+wscat -c "ws://127.0.0.1:4317/ws/progress?runId=run_x" -H "Authorization: Bearer $PLATFORM_API_TOKEN"
 ```
 
 **Desktop dashboard:**
 ```javascript
 class ProgressMonitor {
-  constructor(token, runId = null) {
+  constructor(token, runId) {
     const url = new URL('ws://127.0.0.1:4317/ws/progress');
-    url.searchParams.set('token', token);
-    if (runId) url.searchParams.set('runId', runId);
-    
-    this.ws = new WebSocket(url.toString());
+    url.searchParams.set('runId', runId);
+
+    const encodedToken = btoa(unescape(encodeURIComponent(token)))
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/g, '');
+
+    this.ws = new WebSocket(url.toString(), [
+      'agentred-progress',
+      `agentred-token.${encodedToken}`,
+    ]);
     this.ws.onmessage = (event) => this.handleUpdate(JSON.parse(event.data));
     this.ws.onerror = (error) => console.error('WebSocket error:', error);
     this.ws.onclose = () => this.reconnect();

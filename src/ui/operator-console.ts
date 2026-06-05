@@ -2614,10 +2614,13 @@ body.show-advanced .review-grid {
 
 export const OPERATOR_CONSOLE_JS = `(() => {
   const platformAiConfigStorageKey = 'platformAiConfig';
+  const legacyPlatformTokenStorageKey = 'platformToken';
   const storedPlatformAiConfig = loadPlatformAiConfig();
+  localStorage.removeItem(legacyPlatformTokenStorageKey);
+  sessionStorage.removeItem(legacyPlatformTokenStorageKey);
 
   const state = {
-    token: localStorage.getItem('platformToken') || '',
+    token: '',
     language: localStorage.getItem('platformLanguage') || (((navigator.language || '').toLowerCase().startsWith('zh')) ? 'zh-CN' : 'en'),
     activeRunId: localStorage.getItem('activeRunId') || '',
     showAdvanced: localStorage.getItem('showAdvancedConsole') === '1',
@@ -4429,7 +4432,8 @@ export const OPERATOR_CONSOLE_JS = `(() => {
     els.tokenForm.addEventListener('submit', (event) => {
       event.preventDefault();
       state.token = els.tokenInput.value.trim();
-      localStorage.setItem('platformToken', state.token);
+      localStorage.removeItem(legacyPlatformTokenStorageKey);
+      sessionStorage.removeItem(legacyPlatformTokenStorageKey);
       showMessage('Token saved. Refreshing runs.');
       refreshAgentFramework();
       refreshWorkerLeaderboard();
@@ -4964,7 +4968,7 @@ export const OPERATOR_CONSOLE_JS = `(() => {
     closeProgressSocket();
 
     const runId = state.activeRunId;
-    const ws = new WebSocket(buildProgressSocketUrl(runId));
+    const ws = new WebSocket(buildProgressSocketUrl(runId), buildProgressSocketProtocols());
     progressSocket.ws = ws;
     progressSocket.runId = runId;
 
@@ -5044,8 +5048,16 @@ export const OPERATOR_CONSOLE_JS = `(() => {
 
   function buildProgressSocketUrl(runId) {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const params = new URLSearchParams({ runId, token: state.token });
+    const params = new URLSearchParams({ runId });
     return protocol + '//' + window.location.host + '/ws/progress?' + params.toString();
+  }
+
+  function buildProgressSocketProtocols() {
+    return ['agentred-progress', 'agentred-token.' + encodeTokenSubprotocol(state.token)];
+  }
+
+  function encodeTokenSubprotocol(token) {
+    return btoa(unescape(encodeURIComponent(token))).replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=+$/g, '');
   }
 
   async function refreshReview() {

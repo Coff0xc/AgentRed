@@ -93,7 +93,7 @@ export class AgentRedProgressClient {
       const wsUrl = this.buildWebSocketUrl();
       console.log('[AgentRedProgressClient] Connecting to WebSocket:', wsUrl);
 
-      this.ws = new WebSocket(wsUrl);
+      this.ws = new WebSocket(wsUrl, this.buildWebSocketProtocols());
 
       this.ws.onopen = () => {
         console.log('[AgentRedProgressClient] WebSocket connected');
@@ -240,9 +240,12 @@ export class AgentRedProgressClient {
     const base = this.baseUrl.replace(/^http/, 'ws');
     const params = new URLSearchParams({
       runId: this.runId,
-      token: this.token,
     });
     return `${base}/ws/progress?${params}`;
+  }
+
+  private buildWebSocketProtocols(): string[] {
+    return ['agentred-progress', `agentred-token.${base64UrlEncode(this.token)}`];
   }
 
   private setState(newState: ConnectionState): void {
@@ -261,6 +264,13 @@ export class AgentRedProgressClient {
   isConnected(): boolean {
     return this.state === 'connected' || this.state === 'polling';
   }
+}
+
+function base64UrlEncode(value: string): string {
+  return btoa(unescape(encodeURIComponent(value)))
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '');
 }
 
 /**

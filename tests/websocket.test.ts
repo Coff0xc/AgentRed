@@ -7,6 +7,10 @@ import { startApiServer } from '../src/api/server.js';
 import type { Platform } from '../src/platform.js';
 import type { ApiHandle } from '../src/api/server.js';
 
+function tokenSubprotocol(token: string): string {
+  return `agentred-token.${Buffer.from(token, 'utf8').toString('base64url')}`;
+}
+
 test('WebSocket real-time progress push broadcasts run events to subscribers', async () => {
   const platform: Platform = createPlatform({ databasePath: undefined });
   const api: ApiHandle = await startApiServer(platform, {
@@ -95,6 +99,57 @@ test('WebSocket real-time progress push broadcasts run events to subscribers', a
     const eventMsg = receivedMessages.find((msg) => msg.type === 'fact.added');
     assert.ok(eventMsg, 'Should receive fact.added event');
     assert.strictEqual(eventMsg.runId, run.id);
+  } finally {
+    await api.close();
+  }
+});
+
+test('WebSocket server accepts authentication via subprotocol token without URL token', async () => {
+  const platform: Platform = createPlatform({ databasePath: undefined });
+  const api: ApiHandle = await startApiServer(platform, {
+    port: 0,
+    authToken: 'test-token',
+    enableWebSocket: true,
+  });
+
+  try {
+    const port = new URL(api.url).port;
+    const run = platform.graph.createRun({
+      target: 'https://example.com',
+      goal: 'Test subprotocol auth',
+      scopePolicy: {
+        allowedAssets: ['https://example.com'],
+        deniedAssets: [],
+        allowedMethods: ['GET'],
+        destructiveAllowed: false,
+        credentialRules: { allowVaultReferencesOnly: false },
+        rateLimits: { requestsPerMinute: 60 },
+      },
+      workerPool: [{ name: 'mock', type: 'mock', maxRunning: 1, priority: 1 }],
+    });
+
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/progress?runId=${run.id}`, [
+      'agentred-progress',
+      tokenSubprotocol('test-token'),
+    ]);
+
+    await new Promise<void>((resolve, reject) => {
+      ws.on('open', () => {
+        assert.strictEqual(ws.protocol, 'agentred-progress');
+      });
+
+      ws.on('message', (data: Buffer) => {
+        const message = JSON.parse(data.toString());
+        assert.strictEqual(message.type, 'connection.established');
+        assert.strictEqual(message.runId, run.id);
+        resolve();
+      });
+
+      ws.on('error', reject);
+      setTimeout(() => reject(new Error('Test timeout')), 3000);
+    });
+
+    ws.close();
   } finally {
     await api.close();
   }
@@ -199,6 +254,53 @@ test('WebSocket server rejects connections with invalid authentication token', a
     });
 
     const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/progress?runId=${run.id}&token=wrong-token`);
+
+    await new Promise<void>((resolve, reject) => {
+      ws.on('close', (code, reason) => {
+        assert.strictEqual(code, 1008, 'Should close with policy violation code');
+        assert.match(reason.toString(), /invalid/i, 'Reason should mention invalid token');
+        resolve();
+      });
+
+      ws.on('error', () => {
+        // Expected - connection will be rejected
+      });
+
+      setTimeout(() => reject(new Error('Test timeout')), 3000);
+    });
+  } finally {
+    await api.close();
+  }
+});
+
+test('WebSocket server rejects connections with invalid subprotocol token', async () => {
+  const platform: Platform = createPlatform({ databasePath: undefined });
+  const api: ApiHandle = await startApiServer(platform, {
+    port: 0,
+    authToken: 'test-token',
+    enableWebSocket: true,
+  });
+
+  try {
+    const port = new URL(api.url).port;
+    const run = platform.graph.createRun({
+      target: 'https://example.com',
+      goal: 'Test invalid subprotocol auth',
+      scopePolicy: {
+        allowedAssets: ['https://example.com'],
+        deniedAssets: [],
+        allowedMethods: ['GET'],
+        destructiveAllowed: false,
+        credentialRules: { allowVaultReferencesOnly: false },
+        rateLimits: { requestsPerMinute: 60 },
+      },
+      workerPool: [{ name: 'mock', type: 'mock', maxRunning: 1, priority: 1 }],
+    });
+
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/progress?runId=${run.id}`, [
+      'agentred-progress',
+      tokenSubprotocol('wrong-token'),
+    ]);
 
     await new Promise<void>((resolve, reject) => {
       ws.on('close', (code, reason) => {

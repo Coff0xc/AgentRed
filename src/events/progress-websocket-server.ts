@@ -4,6 +4,9 @@ import type { IncomingMessage } from 'node:http';
 
 import type { RunEvent } from '../domain/types.js';
 
+const PROGRESS_SUBPROTOCOL = 'agentred-progress';
+const TOKEN_SUBPROTOCOL_PREFIX = 'agentred-token.';
+
 export interface ProgressUpdate {
   type: RunEvent['type'];
   runId: string;
@@ -64,6 +67,7 @@ export class ProgressWebSocketServer {
       path: this.path,
       // Disable automatic per-message deflate to reduce overhead
       perMessageDeflate: false,
+      handleProtocols: (protocols) => (protocols.has(PROGRESS_SUBPROTOCOL) ? PROGRESS_SUBPROTOCOL : false),
     });
 
     this.wss.on('connection', this.handleConnection.bind(this));
@@ -278,6 +282,11 @@ export class ProgressWebSocketServer {
 }
 
 function extractPresentedToken(url: URL, req: IncomingMessage): string | undefined {
+  const subprotocolToken = extractSubprotocolToken(req);
+  if (subprotocolToken) {
+    return subprotocolToken;
+  }
+
   const queryToken = url.searchParams.get('token')?.trim();
   if (queryToken) {
     return queryToken;
@@ -291,6 +300,39 @@ function extractPresentedToken(url: URL, req: IncomingMessage): string | undefin
   const authorization = headerValue(req.headers.authorization)?.trim();
   const bearer = authorization?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
   return bearer || undefined;
+}
+
+function extractSubprotocolToken(req: IncomingMessage): string | undefined {
+  const protocols = headerValue(req.headers['sec-websocket-protocol']);
+  if (!protocols) {
+    return undefined;
+  }
+
+  for (const protocol of protocols.split(',')) {
+    const candidate = protocol.trim();
+    if (!candidate.startsWith(TOKEN_SUBPROTOCOL_PREFIX)) {
+      continue;
+    }
+
+    return decodeBase64Url(candidate.slice(TOKEN_SUBPROTOCOL_PREFIX.length));
+  }
+
+  return undefined;
+}
+
+function decodeBase64Url(value: string): string | undefined {
+  if (!/^[A-Za-z0-9_-]+$/.test(value)) {
+    return undefined;
+  }
+
+  try {
+    const normalized = value.replace(/-/g, '+').replace(/_/g, '/');
+    const padding = normalized.length % 4 === 0 ? '' : '='.repeat(4 - (normalized.length % 4));
+    const decoded = Buffer.from(normalized + padding, 'base64').toString('utf8').trim();
+    return decoded || undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function headerValue(value: string | string[] | undefined): string | undefined {
