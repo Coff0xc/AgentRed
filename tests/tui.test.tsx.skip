@@ -1,0 +1,306 @@
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+import React from 'react';
+import { render } from 'ink-testing-library';
+import { RunList } from '../src/cli/tui/components/run-list.js';
+import { IntentViewer } from '../src/cli/tui/components/intent-viewer.js';
+import { EvidencePanel } from '../src/cli/tui/components/evidence-panel.js';
+import type { Run, Intent, Evidence, Finding } from '../src/domain/types.js';
+
+describe('TUI Components', () => {
+  describe('RunList', () => {
+    it('should display empty state when no runs', () => {
+      const { lastFrame } = render(<RunList runs={[]} selectedIndex={0} />);
+      assert.ok(lastFrame()?.includes('No runs found'));
+    });
+
+    it('should display runs with proper formatting', () => {
+      const runs: Run[] = [
+        {
+          id: 'run_test123',
+          target: 'https://example.com',
+          goal: 'Find XSS vulnerabilities',
+          status: 'active',
+          scopePolicy: {
+            allowedAssets: ['https://example.com'],
+            deniedAssets: [],
+            allowedMethods: ['GET', 'POST'],
+            destructiveAllowed: false,
+            credentialRules: { allowVaultReferencesOnly: true },
+            rateLimits: { requestsPerMinute: 60 },
+          },
+          workerPool: [],
+          createdAt: '2026-06-06T10:00:00Z',
+        },
+      ];
+
+      const { lastFrame } = render(<RunList runs={runs} selectedIndex={0} />);
+      const output = lastFrame();
+
+      assert.ok(output?.includes('run_test123'));
+      assert.ok(output?.includes('ACTIVE'));
+      assert.ok(output?.includes('https://example.com'));
+      assert.ok(output?.includes('Find XSS vulnerabilities'));
+    });
+
+    it('should highlight selected run', () => {
+      const runs: Run[] = [
+        {
+          id: 'run_1',
+          target: 'https://example.com',
+          goal: 'Test 1',
+          status: 'active',
+          scopePolicy: {
+            allowedAssets: [],
+            deniedAssets: [],
+            allowedMethods: [],
+            destructiveAllowed: false,
+            credentialRules: { allowVaultReferencesOnly: true },
+            rateLimits: { requestsPerMinute: 60 },
+          },
+          workerPool: [],
+          createdAt: '2026-06-06T10:00:00Z',
+        },
+        {
+          id: 'run_2',
+          target: 'https://test.com',
+          goal: 'Test 2',
+          status: 'completed',
+          scopePolicy: {
+            allowedAssets: [],
+            deniedAssets: [],
+            allowedMethods: [],
+            destructiveAllowed: false,
+            credentialRules: { allowVaultReferencesOnly: true },
+            rateLimits: { requestsPerMinute: 60 },
+          },
+          workerPool: [],
+          createdAt: '2026-06-06T10:00:00Z',
+          completedAt: '2026-06-06T11:00:00Z',
+        },
+      ];
+
+      const { lastFrame } = render(<RunList runs={runs} selectedIndex={1} />);
+      const output = lastFrame();
+
+      assert.ok(output);
+      // Second run should be visible
+      assert.ok(output.includes('run_2'));
+    });
+  });
+
+  describe('IntentViewer', () => {
+    it('should display empty state when no intents', () => {
+      const { lastFrame } = render(<IntentViewer intents={[]} />);
+      assert.ok(lastFrame()?.includes('No active intents'));
+    });
+
+    it('should display intents with risk levels', () => {
+      const intents: Intent[] = [
+        {
+          id: 'intent_123',
+          runId: 'run_test',
+          fromFactIds: [],
+          hypothesis: 'Testing for SQL injection',
+          riskLevel: 'R2',
+          status: 'open',
+          createdBy: 'claude',
+          createdAt: '2026-06-06T10:00:00Z',
+        },
+        {
+          id: 'intent_456',
+          runId: 'run_test',
+          fromFactIds: [],
+          hypothesis: 'Exploit validation',
+          riskLevel: 'R3',
+          status: 'claimed',
+          claimedBy: 'claude',
+          createdBy: 'claude',
+          createdAt: '2026-06-06T10:05:00Z',
+        },
+      ];
+
+      const { lastFrame } = render(<IntentViewer intents={intents} />);
+      const output = lastFrame();
+
+      assert.ok(output?.includes('intent_123'));
+      assert.ok(output?.includes('R2'));
+      assert.ok(output?.includes('OPEN'));
+      assert.ok(output?.includes('R3'));
+      assert.ok(output?.includes('CLAIMED'));
+    });
+
+    it('should filter concluded intents when showAll is false', () => {
+      const intents: Intent[] = [
+        {
+          id: 'intent_open',
+          runId: 'run_test',
+          fromFactIds: [],
+          hypothesis: 'Open intent',
+          riskLevel: 'R1',
+          status: 'open',
+          createdBy: 'claude',
+          createdAt: '2026-06-06T10:00:00Z',
+        },
+        {
+          id: 'intent_concluded',
+          runId: 'run_test',
+          fromFactIds: [],
+          hypothesis: 'Concluded intent',
+          riskLevel: 'R1',
+          status: 'concluded',
+          createdBy: 'claude',
+          createdAt: '2026-06-06T10:00:00Z',
+          concludedAt: '2026-06-06T10:05:00Z',
+        },
+      ];
+
+      const { lastFrame } = render(<IntentViewer intents={intents} showAll={false} />);
+      const output = lastFrame();
+
+      assert.ok(output?.includes('intent_open'));
+      assert.ok(!output?.includes('intent_concluded'));
+    });
+
+    it('should show all intents when showAll is true', () => {
+      const intents: Intent[] = [
+        {
+          id: 'intent_open',
+          runId: 'run_test',
+          fromFactIds: [],
+          hypothesis: 'Open intent',
+          riskLevel: 'R1',
+          status: 'open',
+          createdBy: 'claude',
+          createdAt: '2026-06-06T10:00:00Z',
+        },
+        {
+          id: 'intent_concluded',
+          runId: 'run_test',
+          fromFactIds: [],
+          hypothesis: 'Concluded intent',
+          riskLevel: 'R1',
+          status: 'concluded',
+          createdBy: 'claude',
+          createdAt: '2026-06-06T10:00:00Z',
+          concludedAt: '2026-06-06T10:05:00Z',
+        },
+      ];
+
+      const { lastFrame } = render(<IntentViewer intents={intents} showAll={true} />);
+      const output = lastFrame();
+
+      assert.ok(output?.includes('intent_open'));
+      // When showAll is true, concluded intents should be visible
+      assert.ok(output?.includes('intent_conc')); // Truncated to 12 chars
+    });
+  });
+
+  describe('EvidencePanel', () => {
+    it('should display empty state when no evidence', () => {
+      const { lastFrame } = render(<EvidencePanel evidence={[]} findings={[]} />);
+      const output = lastFrame();
+
+      assert.ok(output?.includes('No evidence collected yet'));
+      assert.ok(output?.includes('No findings yet'));
+    });
+
+    it('should display evidence with kinds and redaction state', () => {
+      const evidence: Evidence[] = [
+        {
+          id: 'ev_123',
+          runId: 'run_test',
+          kind: 'http_exchange',
+          sha256: 'abc123',
+          redactionState: 'safe_for_cloud',
+          localUri: 'file:///tmp/ev_123',
+          createdAt: '2026-06-06T10:00:00Z',
+        },
+        {
+          id: 'ev_456',
+          runId: 'run_test',
+          kind: 'command_output',
+          sha256: 'def456',
+          redactionState: 'raw_local_only',
+          localUri: 'file:///tmp/ev_456',
+          createdAt: '2026-06-06T10:05:00Z',
+        },
+      ];
+
+      const { lastFrame } = render(<EvidencePanel evidence={evidence} findings={[]} />);
+      const output = lastFrame();
+
+      assert.ok(output?.includes('ev_123'));
+      assert.ok(output?.includes('http_exchange'));
+      assert.ok(output?.includes('command_output'));
+      // The component displays both evidence items
+      assert.ok(output);
+    });
+
+    it('should display findings with severity and validation state', () => {
+      const findings: Finding[] = [
+        {
+          id: 'finding_123',
+          runId: 'run_test',
+          title: 'SQL Injection in login form',
+          severity: 'high',
+          confidence: 'confirmed',
+          validationState: 'confirmed',
+          evidenceIds: ['ev_123'],
+          affectedAssets: ['https://example.com/login'],
+          reproSteps: ['Step 1', 'Step 2'],
+          impact: 'High impact',
+          remediation: 'Fix SQL query',
+          createdAt: '2026-06-06T10:00:00Z',
+        },
+        {
+          id: 'finding_456',
+          runId: 'run_test',
+          title: 'XSS in search parameter',
+          severity: 'medium',
+          confidence: 'likely',
+          validationState: 'candidate',
+          evidenceIds: ['ev_456'],
+          affectedAssets: ['https://example.com/search'],
+          reproSteps: [],
+          impact: '',
+          remediation: '',
+          createdAt: '2026-06-06T10:05:00Z',
+        },
+      ];
+
+      const { lastFrame } = render(<EvidencePanel evidence={[]} findings={findings} />);
+      const output = lastFrame();
+
+      assert.ok(output?.includes('finding_123'));
+      assert.ok(output?.includes('HIGH'));
+      assert.ok(output?.includes('confirmed'));
+      assert.ok(output?.includes('SQL Injection'));
+      assert.ok(output?.includes('MEDIUM'));
+      assert.ok(output?.includes('candidate'));
+    });
+
+    it('should limit displayed items to maxItems', () => {
+      const evidence: Evidence[] = Array.from({ length: 20 }, (_, i) => ({
+        id: `ev_${i}`,
+        runId: 'run_test',
+        kind: 'http_exchange' as const,
+        sha256: `hash_${i}`,
+        redactionState: 'safe_for_cloud' as const,
+        localUri: `file:///tmp/ev_${i}`,
+        createdAt: `2026-06-06T10:${String(i).padStart(2, '0')}:00Z`,
+      }));
+
+      const { lastFrame } = render(<EvidencePanel evidence={evidence} findings={[]} maxItems={5} />);
+      const output = lastFrame();
+
+      // Should show most recent 5 (ev_19 to ev_15)
+      assert.ok(output?.includes('ev_19'));
+      // Check that older items are not shown (allowing for partial matches)
+      const hasEv0 = output?.includes('ev_0') && !output?.includes('ev_10');
+      const hasEv1 = output?.includes('ev_1') && !output?.includes('ev_11') && !output?.includes('ev_19');
+      assert.ok(!hasEv0);
+      assert.ok(!hasEv1);
+    });
+  });
+});

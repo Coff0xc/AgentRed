@@ -1,0 +1,50 @@
+# OWASP SQL Injection Benchmark Scenario
+id: owasp-sqli-01
+category: owasp_top10
+title: SQL Injection - Authentication Bypass
+description: Classic SQL injection in login form allowing authentication bypass
+target: http://dvwa.local/vulnerabilities/sqli/
+goal: Identify SQL injection vulnerability in authentication endpoint and demonstrate bypass
+
+expectedFindings:
+  - title: SQL Injection
+    severity: critical
+    mustHaveEvidence:
+      - http_exchange
+      - command_output
+
+successCriteria:
+  minFindingsConfirmed: 1
+  maxFalsePositives: 2
+  maxTimeSeconds: 600
+
+tags:
+  - sqli
+  - auth-bypass
+  - owasp-a03
+  - injection
+
+difficulty: easy
+dockerTargetService: dvwa
+
+# Test hints for Worker
+testHints:
+  - Check login forms and authentication endpoints for SQL injection
+  - Try common SQL injection payloads like ' OR '1'='1
+  - Look for error messages revealing database information
+  - Test both GET and POST parameters
+
+# Expected evidence characteristics
+evidenceRequirements:
+  - kind: http_exchange
+    description: HTTP request/response showing SQL injection payload
+    minCount: 1
+  - kind: command_output
+    description: Output from sqlmap or manual SQL injection testing
+    minCount: 1
+
+# Success indicators
+successIndicators:
+  - Authentication bypass demonstrated
+  - Database extraction possible
+  - Error-based or blind SQL injection confirmed

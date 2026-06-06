@@ -7,6 +7,7 @@ import type {
   Intent,
   RiskLevel,
   Run,
+  WorkerRole,
 } from '../domain/types.js';
 import type { RunEventService } from '../events/run-event-service.js';
 import type { PlatformStore } from '../storage/store.js';
@@ -110,6 +111,7 @@ export class GraphServer {
     fromFactIds: string[];
     hypothesis: string;
     riskLevel: RiskLevel;
+    role?: WorkerRole;
     createdBy: string;
   }): Intent {
     this.getRun(input.runId);
@@ -119,6 +121,7 @@ export class GraphServer {
       fromFactIds: input.fromFactIds,
       hypothesis: input.hypothesis,
       riskLevel: input.riskLevel,
+      ...(input.role ? { role: input.role } : {}),
       status: 'open',
       createdBy: input.createdBy,
       createdAt: nowIso(),

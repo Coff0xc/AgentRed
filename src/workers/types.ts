@@ -53,7 +53,7 @@ export type WorkerTaskResult =
       data: {
         fact?: { description: string };
         complete?: { description: string; from?: string[] };
-        intent?: { description: string; from: string[]; riskLevel?: 'R0' | 'R1' | 'R2' | 'R3' | 'R4' };
+        intent?: { description: string; from: string[]; riskLevel?: 'R0' | 'R1' | 'R2' | 'R3' | 'R4'; role?: 'scout' | 'exploit' | 'credential' | 'generalist' };
         description?: string;
         toolRequests?: WorkerToolRequest[];
         /** When true, the dispatcher will re-invoke this worker after executing toolRequests,

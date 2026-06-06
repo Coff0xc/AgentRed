@@ -259,6 +259,17 @@ async function route(
         'GET /findings?runId={id}',
         'POST /runs/{id}/evaluations',
         'POST /reports',
+        'GET /pyrit/scenarios/library/summary',
+        'GET /pyrit/scenarios',
+        'GET /pyrit/scenarios/{id}',
+        'GET /pyrit/scenarios/categories/{category}',
+        'GET /pyrit/scenarios/risk-levels/{riskLevel}',
+        'POST /pyrit/scenarios/import',
+        'POST /pyrit/scenarios/import-defaults',
+        'POST /pyrit/scenarios/{id}/run',
+        'GET /runs/{id}/pyrit/evaluation',
+        'POST /pyrit/scenarios/{id}/status',
+        'GET /pyrit/dataset-metadata',
       ],
     });
     return;
@@ -1348,6 +1359,131 @@ async function route(
   if (method === 'POST' && url.pathname === '/reports') {
     const input = validateReportRequest(await readJson(request));
     sendJson(response, 201, platform.reports.generate(input));
+    return;
+  }
+
+  // PyRIT Scenario Library routes
+  if (method === 'GET' && url.pathname === '/pyrit/scenarios/library/summary') {
+    sendJson(response, 200, platform.pyritScenarioLibrary.getSummary());
+    return;
+  }
+
+  if (method === 'GET' && url.pathname === '/pyrit/scenarios') {
+    const category = url.searchParams.get('category');
+    const riskLevel = url.searchParams.get('riskLevel');
+    const status = url.searchParams.get('status');
+    let scenarios = Object.values(platform.store.state.pyritScenarios || {});
+    if (category) {
+      scenarios = scenarios.filter((s) => s.category === category);
+    }
+    if (riskLevel) {
+      scenarios = scenarios.filter((s) => s.riskLevel === riskLevel);
+    }
+    if (status) {
+      scenarios = scenarios.filter((s) => s.status === status);
+    }
+    sendJson(response, 200, { count: scenarios.length, scenarios: scenarios.slice(0, 100) });
+    return;
+  }
+
+  if (method === 'GET' && pathParts[0] === 'pyrit' && pathParts[1] === 'scenarios' && pathParts.length === 3) {
+    const scenario = platform.pyritScenarioLibrary.getScenario(pathParts[2]);
+    if (!scenario) {
+      throw new HttpError(404, 'Scenario not found');
+    }
+    sendJson(response, 200, scenario);
+    return;
+  }
+
+  if (method === 'GET' && pathParts[0] === 'pyrit' && pathParts[1] === 'scenarios' && pathParts[2] === 'categories' && pathParts.length === 4) {
+    const scenarios = platform.pyritScenarioLibrary.listByCategory(pathParts[3] as any);
+    sendJson(response, 200, { category: pathParts[3], count: scenarios.length, scenarios });
+    return;
+  }
+
+  if (method === 'GET' && pathParts[0] === 'pyrit' && pathParts[1] === 'scenarios' && pathParts[2] === 'risk-levels' && pathParts.length === 4) {
+    const scenarios = platform.pyritScenarioLibrary.listByRiskLevel(pathParts[3] as any);
+    sendJson(response, 200, { riskLevel: pathParts[3], count: scenarios.length, scenarios });
+    return;
+  }
+
+  if (method === 'POST' && url.pathname === '/pyrit/scenarios/import') {
+    const input = await readJson(request);
+    if (!input || typeof input !== 'object' || !('source' in input) || !('scenarios' in input) || !Array.isArray((input as any).scenarios)) {
+      throw new HttpError(400, 'Invalid import payload. Expected { source, scenarios }');
+    }
+    const importResult = platform.pyritScenarioLibrary.importScenarios(input as any);
+    sendJson(response, 201, { message: 'Scenario import completed', import: importResult });
+    return;
+  }
+
+  if (method === 'POST' && url.pathname === '/pyrit/scenarios/import-defaults') {
+    const datasets = await import('../observability/pyrit-scenario-datasets.js');
+    const scenarios = datasets.ALL_PYRIT_SCENARIOS.map((template: any) => ({
+      name: template.name,
+      category: template.category,
+      description: template.description,
+      objective: template.objective,
+      riskLevel: template.riskLevel,
+      targetType: template.targetType,
+      fixture: template.fixture,
+      successCriteria: template.successCriteria,
+      scorers: template.scorers,
+      safetyNotes: template.safetyNotes,
+      sourceDataset: datasets.PYRIT_DATASET_METADATA.source,
+      sourceVersion: datasets.PYRIT_DATASET_METADATA.version,
+      sourceUrl: datasets.PYRIT_DATASET_METADATA.url,
+      license: datasets.PYRIT_DATASET_METADATA.license,
+    }));
+    const importResult = platform.pyritScenarioLibrary.importScenarios({ source: datasets.PYRIT_DATASET_METADATA.source, scenarios });
+    sendJson(response, 201, { message: 'Default PyRIT scenarios imported successfully', metadata: datasets.PYRIT_DATASET_METADATA, import: importResult });
+    return;
+  }
+
+  if (method === 'POST' && pathParts[0] === 'pyrit' && pathParts[1] === 'scenarios' && pathParts[3] === 'run' && pathParts.length === 4) {
+    const scenario = platform.pyritScenarioLibrary.getScenario(pathParts[2]);
+    if (!scenario) {
+      throw new HttpError(404, 'Scenario not found');
+    }
+    const input = await readJson(request);
+    if (!input || typeof input !== 'object' || !('runId' in input) || !('workerName' in input)) {
+      throw new HttpError(400, 'Invalid payload. Expected { runId, workerName }');
+    }
+    assertRunExists(platform, (input as any).runId);
+    sendJson(response, 201, {
+      message: 'Scenario evaluation task created',
+      scenario: { id: scenario.id, name: scenario.name, category: scenario.category },
+      runId: (input as any).runId,
+      workerName: (input as any).workerName,
+      nextSteps: [
+        'Use Dispatcher to execute the scenario fixture through Worker envelope',
+        'Worker will receive fixture as task input and return structured result',
+        'Scorers will evaluate Worker output and record result',
+        'View results via GET /runs/:runId/pyrit/evaluation',
+      ],
+    });
+    return;
+  }
+
+  if (method === 'GET' && pathParts[0] === 'runs' && pathParts[2] === 'pyrit' && pathParts[3] === 'evaluation' && pathParts.length === 4) {
+    assertRunExists(platform, pathParts[1]);
+    sendJson(response, 200, platform.pyritScenarioLibrary.getEvaluationReport(pathParts[1]));
+    return;
+  }
+
+  if (method === 'POST' && pathParts[0] === 'pyrit' && pathParts[1] === 'scenarios' && pathParts[3] === 'status' && pathParts.length === 4) {
+    const input = await readJson(request);
+    if (!input || typeof input !== 'object' || !('status' in input) || !['imported', 'adapted', 'tested', 'retired'].includes((input as any).status)) {
+      throw new HttpError(400, 'Invalid status. Expected: imported, adapted, tested, or retired');
+    }
+    platform.pyritScenarioLibrary.updateStatus(pathParts[2], (input as any).status);
+    sendJson(response, 200, { message: 'Scenario status updated', scenarioId: pathParts[2], status: (input as any).status });
+    return;
+  }
+
+  if (method === 'GET' && url.pathname === '/pyrit/dataset-metadata') {
+    const datasets = await import('../observability/pyrit-scenario-datasets.js');
+    sendJson(response, 200, datasets.PYRIT_DATASET_METADATA);
     return;
   }
 

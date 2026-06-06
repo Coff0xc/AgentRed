@@ -1,0 +1,402 @@
+{
+  "llm_providers": {
+    "openai": {
+      "endpoints": [
+        "/v1/chat/completions",
+        "/v1/completions",
+        "/v1/embeddings",
+        "/v1/models"
+      ],
+      "headers": [
+        "openai-organization",
+        "openai-processing-ms",
+        "openai-version"
+      ],
+      "errorPatterns": [
+        "invalid_api_key",
+        "invalid_request_error",
+        "rate_limit_exceeded"
+      ],
+      "defaultPorts": [443]
+    },
+    "anthropic": {
+      "endpoints": [
+        "/v1/messages",
+        "/v1/complete"
+      ],
+      "headers": [
+        "anthropic-version",
+        "request-id"
+      ],
+      "errorPatterns": [
+        "authentication_error",
+        "invalid_request_error",
+        "overloaded_error"
+      ],
+      "defaultPorts": [443]
+    },
+    "azure_openai": {
+      "endpoints": [
+        "/openai/deployments/{deployment-id}/chat/completions",
+        "/openai/deployments/{deployment-id}/completions"
+      ],
+      "headers": [
+        "x-ms-region",
+        "x-ms-client-request-id",
+        "apim-request-id"
+      ],
+      "errorPatterns": [
+        "Unauthorized",
+        "OperationNotAllowed",
+        "QuotaExceeded"
+      ],
+      "defaultPorts": [443]
+    },
+    "google_vertex": {
+      "endpoints": [
+        "/v1/projects/{project}/locations/{location}/publishers/google/models/{model}:predict",
+        "/v1beta1/models/{model}:generateContent"
+      ],
+      "headers": [
+        "x-goog-api-client",
+        "x-goog-request-params"
+      ],
+      "errorPatterns": [
+        "PERMISSION_DENIED",
+        "UNAUTHENTICATED",
+        "RESOURCE_EXHAUSTED"
+      ],
+      "defaultPorts": [443]
+    },
+    "aws_bedrock": {
+      "endpoints": [
+        "/model/{modelId}/invoke",
+        "/model/{modelId}/invoke-with-response-stream"
+      ],
+      "headers": [
+        "x-amzn-requestid",
+        "x-amz-bedrock-",
+        "x-amzn-bedrock-"
+      ],
+      "errorPatterns": [
+        "AccessDeniedException",
+        "ThrottlingException",
+        "ValidationException"
+      ],
+      "defaultPorts": [443]
+    },
+    "cohere": {
+      "endpoints": [
+        "/v1/generate",
+        "/v1/embed",
+        "/v1/chat"
+      ],
+      "headers": [
+        "x-cohere-"
+      ],
+      "errorPatterns": [
+        "invalid_api_token",
+        "rate_limit_exceeded"
+      ],
+      "defaultPorts": [443]
+    },
+    "huggingface": {
+      "endpoints": [
+        "/models/{model}",
+        "/api/models/{model}"
+      ],
+      "headers": [
+        "x-compute-type",
+        "x-compute-time"
+      ],
+      "errorPatterns": [
+        "Authorization header is invalid",
+        "Model {model} does not exist"
+      ],
+      "defaultPorts": [443]
+    },
+    "ollama": {
+      "endpoints": [
+        "/api/generate",
+        "/api/chat",
+        "/api/tags",
+        "/api/show"
+      ],
+      "headers": [],
+      "errorPatterns": [
+        "model not found",
+        "invalid request"
+      ],
+      "defaultPorts": [11434]
+    },
+    "vllm": {
+      "endpoints": [
+        "/v1/completions",
+        "/v1/chat/completions",
+        "/v1/models",
+        "/health"
+      ],
+      "headers": [
+        "x-vllm-"
+      ],
+      "errorPatterns": [
+        "model not found",
+        "validation error"
+      ],
+      "defaultPorts": [8000]
+    },
+    "tgi": {
+      "endpoints": [
+        "/generate",
+        "/generate_stream",
+        "/health",
+        "/info"
+      ],
+      "headers": [],
+      "errorPatterns": [
+        "Validation error",
+        "Model is not ready"
+      ],
+      "defaultPorts": [8080, 3000]
+    }
+  },
+  "vector_databases": {
+    "pinecone": {
+      "endpoints": [
+        "/describe_index_stats",
+        "/query",
+        "/vectors/upsert",
+        "/vectors/fetch"
+      ],
+      "headers": [
+        "x-pinecone-api-version"
+      ],
+      "errorPatterns": [
+        "UNAUTHENTICATED",
+        "INVALID_ARGUMENT",
+        "QUOTA_EXCEEDED"
+      ],
+      "defaultPorts": [443]
+    },
+    "weaviate": {
+      "endpoints": [
+        "/v1/schema",
+        "/v1/objects",
+        "/v1/meta",
+        "/v1/.well-known/ready"
+      ],
+      "headers": [],
+      "errorPatterns": [
+        "forbidden",
+        "unauthorized",
+        "not found"
+      ],
+      "defaultPorts": [8080, 443]
+    },
+    "milvus": {
+      "endpoints": [
+        "/v1/vector/collections",
+        "/v1/vector/search",
+        "/v1/vector/query"
+      ],
+      "headers": [],
+      "errorPatterns": [
+        "unauthorized",
+        "collection not found"
+      ],
+      "defaultPorts": [19530, 9091]
+    },
+    "qdrant": {
+      "endpoints": [
+        "/collections",
+        "/collections/{name}/points/search",
+        "/cluster"
+      ],
+      "headers": [],
+      "errorPatterns": [
+        "Unauthorized",
+        "Not found"
+      ],
+      "defaultPorts": [6333]
+    },
+    "chroma": {
+      "endpoints": [
+        "/api/v1/collections",
+        "/api/v1/heartbeat"
+      ],
+      "headers": [],
+      "errorPatterns": [
+        "not found",
+        "invalid request"
+      ],
+      "defaultPorts": [8000]
+    },
+    "elasticsearch": {
+      "endpoints": [
+        "/_cluster/health",
+        "/_cat/indices",
+        "/_search"
+      ],
+      "headers": [
+        "x-elastic-product"
+      ],
+      "errorPatterns": [
+        "security_exception",
+        "index_not_found_exception"
+      ],
+      "defaultPorts": [9200]
+    },
+    "redis_vector": {
+      "endpoints": [
+        "/",
+        "/ping"
+      ],
+      "headers": [],
+      "errorPatterns": [
+        "NOAUTH",
+        "ERR"
+      ],
+      "defaultPorts": [6379]
+    }
+  },
+  "ai_frameworks": {
+    "langchain": {
+      "indicators": [
+        "langchain",
+        "LangChain",
+        "langchain_core",
+        "langsmith"
+      ],
+      "commonEndpoints": [
+        "/chain",
+        "/agent",
+        "/llm"
+      ],
+      "vulnerabilities": [
+        "Arbitrary code execution via custom chains",
+        "Prompt injection in chain prompts",
+        "Memory pollution across sessions"
+      ]
+    },
+    "llamaindex": {
+      "indicators": [
+        "llama_index",
+        "LlamaIndex",
+        "gpt_index"
+      ],
+      "commonEndpoints": [
+        "/query",
+        "/index"
+      ],
+      "vulnerabilities": [
+        "Index poisoning",
+        "Unvalidated document ingestion"
+      ]
+    },
+    "autogen": {
+      "indicators": [
+        "autogen",
+        "AutoGen",
+        "pyautogen"
+      ],
+      "commonEndpoints": [
+        "/agent",
+        "/conversation"
+      ],
+      "vulnerabilities": [
+        "Multi-agent coordination attacks",
+        "Unrestricted code execution"
+      ]
+    },
+    "haystack": {
+      "indicators": [
+        "haystack",
+        "Haystack",
+        "farm-haystack"
+      ],
+      "commonEndpoints": [
+        "/query",
+        "/documents"
+      ],
+      "vulnerabilities": [
+        "Document store injection",
+        "Pipeline manipulation"
+      ]
+    }
+  },
+  "mcp_servers": {
+    "common_signatures": {
+      "endpoints": [
+        "/mcp/tools",
+        "/mcp/resources",
+        "/mcp/prompts"
+      ],
+      "headers": [
+        "x-mcp-version",
+        "content-type: application/json"
+      ],
+      "responsePatterns": [
+        "\"jsonrpc\": \"2.0\"",
+        "\"method\": \"tools/list\"",
+        "\"capabilities\":"
+      ]
+    },
+    "dangerous_tools": [
+      "filesystem_read",
+      "filesystem_write",
+      "shell_execute",
+      "fetch",
+      "database_query",
+      "eval",
+      "exec"
+    ]
+  },
+  "ai_agents": {
+    "common_patterns": {
+      "endpoints": [
+        "/agent/execute",
+        "/agent/plan",
+        "/tools/invoke"
+      ],
+      "vulnerabilities": [
+        "Tool injection via prompt",
+        "State pollution",
+        "Unauthorized tool execution"
+      ]
+    }
+  },
+  "common_vulnerabilities": {
+    "prompt_injection": {
+      "indicators": [
+        "Ignore previous instructions",
+        "System override",
+        "Developer mode"
+      ],
+      "severity": "high"
+    },
+    "data_exposure": {
+      "indicators": [
+        "No authentication required",
+        "Public endpoint",
+        "CORS wildcard"
+      ],
+      "severity": "critical"
+    },
+    "insecure_deserialization": {
+      "indicators": [
+        "pickle",
+        "yaml.load",
+        "eval"
+      ],
+      "severity": "critical"
+    },
+    "ssrf": {
+      "indicators": [
+        "Unvalidated URL parameters",
+        "fetch",
+        "requests.get"
+      ],
+      "severity": "high"
+    }
+  }
+}

@@ -1,0 +1,50 @@
+# OWASP XSS Benchmark Scenario
+id: owasp-xss-01
+category: owasp_top10
+title: Reflected XSS - User Input
+description: Reflected XSS vulnerability in search or input field
+target: http://dvwa.local/vulnerabilities/xss_r/
+goal: Identify reflected XSS vulnerability and demonstrate successful payload execution
+
+expectedFindings:
+  - title: Reflected Cross-Site Scripting
+    severity: high
+    mustHaveEvidence:
+      - http_exchange
+      - screenshot
+
+successCriteria:
+  minFindingsConfirmed: 1
+  maxFalsePositives: 1
+  maxTimeSeconds: 480
+
+tags:
+  - xss
+  - reflected
+  - owasp-a03
+  - injection
+
+difficulty: easy
+dockerTargetService: dvwa
+
+# Test hints for Worker
+testHints:
+  - Test input fields and URL parameters for XSS
+  - Try common XSS payloads like <script>alert(1)</script>
+  - Check if input is reflected in the response without sanitization
+  - Use browser automation to confirm script execution
+
+# Expected evidence characteristics
+evidenceRequirements:
+  - kind: http_exchange
+    description: HTTP request with XSS payload and response showing reflection
+    minCount: 1
+  - kind: screenshot
+    description: Browser screenshot showing XSS alert or execution
+    minCount: 1
+
+# Success indicators
+successIndicators:
+  - XSS payload reflected in response
+  - JavaScript execution confirmed in browser
+  - No effective input sanitization observed

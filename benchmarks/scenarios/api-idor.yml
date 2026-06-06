@@ -1,0 +1,47 @@
+# API IDOR Benchmark Scenario
+id: api-idor
+category: api_security
+title: Insecure Direct Object Reference
+description: IDOR vulnerability allowing unauthorized access to resources
+target: http://juice-shop.local/api/
+goal: Identify IDOR vulnerability and demonstrate unauthorized data access
+
+expectedFindings:
+  - title: Insecure Direct Object Reference
+    severity: high
+    mustHaveEvidence:
+      - http_exchange
+
+successCriteria:
+  minFindingsConfirmed: 1
+  maxFalsePositives: 2
+  maxTimeSeconds: 540
+
+tags:
+  - idor
+  - api
+  - owasp-a01
+  - bola
+
+difficulty: medium
+dockerTargetService: juice-shop
+
+# Test hints for Worker
+testHints:
+  - Enumerate API endpoints with predictable IDs
+  - Test parameter manipulation (user IDs, order IDs, etc.)
+  - Check if authorization is enforced for resource access
+  - Try accessing other users' data by changing ID parameters
+
+# Expected evidence characteristics
+evidenceRequirements:
+  - kind: http_exchange
+    description: API requests showing unauthorized access to other users' resources
+    minCount: 2
+
+# Success indicators
+successIndicators:
+  - Unauthorized access to other user's data
+  - Predictable resource identifiers
+  - Missing authorization checks on API endpoints
+  - Horizontal privilege escalation demonstrated

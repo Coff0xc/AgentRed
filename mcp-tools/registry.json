@@ -1,0 +1,194 @@
+{
+  "playwright-mcp": [
+    {
+      "serverId": "playwright-mcp",
+      "toolName": "playwright_navigate",
+      "riskLevel": "R1",
+      "allowed": true,
+      "outputSanitization": ["redact_cookies", "redact_tokens"],
+      "maxInvocationsPerMinute": 20,
+      "requiresApproval": false,
+      "policyNotes": "Navigation is read-only"
+    },
+    {
+      "serverId": "playwright-mcp",
+      "toolName": "playwright_screenshot",
+      "riskLevel": "R1",
+      "allowed": true,
+      "outputSanitization": ["redact_cookies", "redact_tokens"],
+      "maxInvocationsPerMinute": 10,
+      "requiresApproval": false,
+      "policyNotes": "Screenshots are read-only captures"
+    },
+    {
+      "serverId": "playwright-mcp",
+      "toolName": "playwright_click",
+      "riskLevel": "R2",
+      "allowed": true,
+      "outputSanitization": ["redact_cookies", "redact_tokens"],
+      "maxInvocationsPerMinute": 15,
+      "requiresApproval": false,
+      "policyNotes": "Clicking may trigger state changes"
+    },
+    {
+      "serverId": "playwright-mcp",
+      "toolName": "playwright_fill",
+      "riskLevel": "R2",
+      "allowed": true,
+      "outputSanitization": ["redact_cookies", "redact_tokens"],
+      "maxInvocationsPerMinute": 10,
+      "requiresApproval": false,
+      "policyNotes": "Form filling may submit data"
+    },
+    {
+      "serverId": "playwright-mcp",
+      "toolName": "playwright_evaluate",
+      "riskLevel": "R4",
+      "allowed": false,
+      "requiresApproval": true,
+      "policyNotes": "JavaScript execution in browser context is dangerous"
+    },
+    {
+      "serverId": "playwright-mcp",
+      "toolName": "playwright_console",
+      "riskLevel": "R1",
+      "allowed": true,
+      "outputSanitization": ["redact_cookies", "redact_tokens"],
+      "maxInvocationsPerMinute": 30,
+      "requiresApproval": false,
+      "policyNotes": "Console logs are read-only"
+    }
+  ],
+  "filesystem-mcp": [
+    {
+      "serverId": "filesystem-mcp",
+      "toolName": "read_file",
+      "riskLevel": "R1",
+      "allowed": true,
+      "outputSanitization": ["redact_file_secrets"],
+      "maxInvocationsPerMinute": 30,
+      "requiresApproval": false,
+      "policyNotes": "Read-only file access"
+    },
+    {
+      "serverId": "filesystem-mcp",
+      "toolName": "list_directory",
+      "riskLevel": "R1",
+      "allowed": true,
+      "maxInvocationsPerMinute": 20,
+      "requiresApproval": false,
+      "policyNotes": "Directory listing is read-only"
+    },
+    {
+      "serverId": "filesystem-mcp",
+      "toolName": "search_files",
+      "riskLevel": "R1",
+      "allowed": true,
+      "maxInvocationsPerMinute": 15,
+      "requiresApproval": false,
+      "policyNotes": "File search is read-only"
+    },
+    {
+      "serverId": "filesystem-mcp",
+      "toolName": "write_file",
+      "riskLevel": "R4",
+      "allowed": false,
+      "requiresApproval": true,
+      "policyNotes": "File writing can modify system state"
+    },
+    {
+      "serverId": "filesystem-mcp",
+      "toolName": "delete_file",
+      "riskLevel": "R4",
+      "allowed": false,
+      "requiresApproval": true,
+      "policyNotes": "File deletion is destructive"
+    },
+    {
+      "serverId": "filesystem-mcp",
+      "toolName": "move_file",
+      "riskLevel": "R3",
+      "allowed": false,
+      "requiresApproval": true,
+      "policyNotes": "Moving files can affect system state"
+    }
+  ],
+  "google-search-mcp": [
+    {
+      "serverId": "google-search-mcp",
+      "toolName": "google_search",
+      "riskLevel": "R1",
+      "allowed": true,
+      "maxInvocationsPerMinute": 10,
+      "requiresApproval": false,
+      "policyNotes": "Search is read-only OSINT"
+    }
+  ],
+  "zebbern-kali-mcp": [
+    {
+      "serverId": "zebbern-kali-mcp",
+      "toolName": "network_tool",
+      "riskLevel": "R1",
+      "allowed": true,
+      "outputSanitization": ["redact_credentials"],
+      "maxInvocationsPerMinute": 5,
+      "requiresApproval": false,
+      "policyNotes": "Passive network reconnaissance tools only (nmap, dig, host, nslookup, whois)"
+    },
+    {
+      "serverId": "zebbern-kali-mcp",
+      "toolName": "web_scanner",
+      "riskLevel": "R2",
+      "allowed": true,
+      "outputSanitization": ["redact_credentials"],
+      "maxInvocationsPerMinute": 3,
+      "requiresApproval": false,
+      "policyNotes": "Active web scanning with limited impact (nikto, dirb, gobuster)"
+    },
+    {
+      "serverId": "zebbern-kali-mcp",
+      "toolName": "exploit_tool",
+      "riskLevel": "R4",
+      "allowed": false,
+      "requiresApproval": true,
+      "policyNotes": "Exploitation tools require explicit approval"
+    },
+    {
+      "serverId": "zebbern-kali-mcp",
+      "toolName": "password_tool",
+      "riskLevel": "R3",
+      "allowed": false,
+      "requiresApproval": true,
+      "policyNotes": "Password cracking requires approval"
+    }
+  ],
+  "pentest-thinking-mcp": [
+    {
+      "serverId": "pentest-thinking-mcp",
+      "toolName": "suggest_methodology",
+      "riskLevel": "R0",
+      "allowed": true,
+      "maxInvocationsPerMinute": 20,
+      "requiresApproval": false,
+      "policyNotes": "Methodology suggestions are metadata only"
+    },
+    {
+      "serverId": "pentest-thinking-mcp",
+      "toolName": "explain_technique",
+      "riskLevel": "R0",
+      "allowed": true,
+      "maxInvocationsPerMinute": 20,
+      "requiresApproval": false,
+      "policyNotes": "Educational content is safe"
+    },
+    {
+      "serverId": "pentest-thinking-mcp",
+      "toolName": "recommend_tools",
+      "riskLevel": "R0",
+      "allowed": true,
+      "maxInvocationsPerMinute": 20,
+      "requiresApproval": false,
+      "policyNotes": "Tool recommendations are metadata"
+    }
+  ]
+}

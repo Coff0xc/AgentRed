@@ -4,10 +4,11 @@ import { mkdirSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
 import { newId, nowIso } from '../domain/ids.js';
-import type { RegisteredToolboxBundle, RiskLevel, RunToolboxBundleBinding } from '../domain/types.js';
+import type { RegisteredToolboxBundle, RiskLevel, RunToolboxBundleBinding, ScopePolicy } from '../domain/types.js';
 import type { RunEventService } from '../events/run-event-service.js';
 import type { GraphServer } from '../graph/graph-server.js';
 import type { PlatformStore } from '../storage/store.js';
+import { sandboxToolboxRunner } from '../sandbox/sandbox-toolbox-runner.js';
 import {
   findScannerTemplate,
   listScannerTemplates,
@@ -344,9 +345,47 @@ export class ToolboxRunner {
     return { allowed: true, profile, template, plan };
   }
 
-  async executePlan(plan: ToolboxRunPlan, toolCallId: string): Promise<ToolboxRunResult> {
+  async executePlan(plan: ToolboxRunPlan, toolCallId: string, scopePolicy?: ScopePolicy): Promise<ToolboxRunResult> {
     const cwd = join(process.cwd(), '.local', 'tool-runs', toolCallId);
     mkdirSync(cwd, { recursive: true });
+
+    // Try sandbox mode first if enabled
+    const sandboxEnabled = await sandboxToolboxRunner.isEnabled();
+    if (sandboxEnabled && scopePolicy && plan.runner !== 'builtin') {
+      const canRun = await sandboxToolboxRunner.canRun();
+      if (canRun.available) {
+        try {
+          const result = await sandboxToolboxRunner.run(
+            {
+              templateId: plan.templateId,
+              target: plan.target,
+              timeoutMs: plan.timeoutMs,
+              scopePolicy,
+              cpuLimit: '1.0',
+              memoryLimit: '512m',
+              workDir: '/workspace',
+            },
+            [plan.command],
+            plan.args
+          );
+          return {
+            command: plan.command,
+            args: plan.args,
+            cwd: `sandbox:${result.sandboxId}`,
+            stdout: result.stdout,
+            stderr: result.stderr,
+            exitCode: result.exitCode,
+            timedOut: result.timedOut,
+            startedAt: result.startedAt,
+            endedAt: result.endedAt,
+          };
+        } catch (err) {
+          console.error('Sandbox execution failed, falling back to process execution:', err);
+        }
+      }
+    }
+
+    // Fallback to direct process execution
     return runToolboxProcess(plan.command, plan.args, cwd, plan.timeoutMs);
   }
 

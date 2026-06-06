@@ -20,6 +20,9 @@ export interface BrowserNavigateInput {
   headers?: Record<string, string>;
   timeoutMs?: number;
   riskLevel?: RiskLevel;
+  captureHar?: boolean;
+  captureTrace?: boolean;
+  captureVideo?: boolean;
 }
 
 export interface BrowserNetworkEvent {
@@ -46,6 +49,9 @@ export interface BrowserAutomationNavigation {
   textPreview?: string;
   consoleMessages?: BrowserConsoleMessage[];
   networkEvents?: BrowserNetworkEvent[];
+  harArchive?: Buffer;
+  traceArchive?: Buffer;
+  videoRecording?: Buffer;
 }
 
 export interface BrowserAutomationRuntime {
@@ -58,6 +64,9 @@ export interface BrowserAutomationRuntime {
     timeoutMs: number;
     userAgent: string;
     allowRequest: (target: string, method: string) => boolean;
+    captureHar?: boolean;
+    captureTrace?: boolean;
+    captureVideo?: boolean;
   }): Promise<BrowserAutomationNavigation>;
   closeSession(sessionId: string): Promise<void>;
 }
@@ -214,6 +223,9 @@ export class BrowserSessionService {
       timeoutMs: input.timeoutMs,
       userAgent: input.session.userAgent,
       allowRequest: (target, method) => this.isRequestInScope(input.input.runId, target, method, input.input.riskLevel ?? 'R1'),
+      captureHar: input.input.captureHar,
+      captureTrace: input.input.captureTrace,
+      captureVideo: input.input.captureVideo,
     });
     const finalUrl = rendered.finalUrl || input.input.target;
     if (!this.isRequestInScope(input.input.runId, finalUrl, 'GET', input.input.riskLevel ?? 'R1')) {
@@ -246,6 +258,11 @@ export class BrowserSessionService {
           consoleMessages,
           network,
         },
+        captures: {
+          harCaptured: !!rendered.harArchive,
+          traceCaptured: !!rendered.traceArchive,
+          videoCaptured: !!rendered.videoRecording,
+        },
         startedAt,
         endedAt: nowIso(),
       }),
@@ -259,6 +276,9 @@ export class BrowserSessionService {
       textPreview: rendered.textPreview,
       consoleMessages,
       network,
+      harArchive: rendered.harArchive,
+      traceArchive: rendered.traceArchive,
+      videoRecording: rendered.videoRecording,
     });
     this.finishNavigation(input.session, finalUrl, snapshot?.id);
     return {
@@ -279,9 +299,12 @@ export class BrowserSessionService {
       textPreview?: string;
       consoleMessages: Array<{ type: string; text: string }>;
       network: Array<Record<string, unknown>>;
+      harArchive?: Buffer;
+      traceArchive?: Buffer;
+      videoRecording?: Buffer;
     },
   ): BrowserSnapshot | undefined {
-    if (!input.screenshot && !input.textPreview && input.consoleMessages.length === 0 && input.network.length === 0) {
+    if (!input.screenshot && !input.textPreview && input.consoleMessages.length === 0 && input.network.length === 0 && !input.harArchive && !input.traceArchive && !input.videoRecording) {
       return undefined;
     }
     const evidenceIds: string[] = [];
@@ -290,6 +313,9 @@ export class BrowserSessionService {
     let screenshotContentType: string | undefined;
     let textEvidenceId: string | undefined;
     let textPreviewTruncated = false;
+    let harEvidenceId: string | undefined;
+    let traceEvidenceId: string | undefined;
+    let videoEvidenceId: string | undefined;
 
     if (input.screenshot) {
       const screenshot = this.evidence.addEvidence({
@@ -302,6 +328,61 @@ export class BrowserSessionService {
       screenshotBytes = input.screenshot.byteLength;
       screenshotContentType = input.screenshotContentType ?? 'image/png';
       evidenceIds.push(screenshot.id);
+    }
+
+    if (input.harArchive) {
+      const redactedHar = redactHarArchive(input.harArchive);
+      const harEvidence = this.evidence.addEvidence({
+        runId,
+        kind: 'replay_bundle',
+        content: redactedHar,
+        redactionState: 'redacted',
+      });
+      harEvidenceId = harEvidence.id;
+      evidenceIds.push(harEvidence.id);
+      this.events?.record({
+        runId,
+        type: 'browser.snapshot.captured',
+        title: 'HAR archive captured',
+        detail: `${redactUrl(input.target)} - ${redactedHar.byteLength} bytes (redacted)`,
+        entityId: harEvidence.id,
+      });
+    }
+
+    if (input.traceArchive) {
+      const traceEvidence = this.evidence.addEvidence({
+        runId,
+        kind: 'replay_bundle',
+        content: input.traceArchive,
+        redactionState: 'raw_local_only',
+      });
+      traceEvidenceId = traceEvidence.id;
+      evidenceIds.push(traceEvidence.id);
+      this.events?.record({
+        runId,
+        type: 'browser.snapshot.captured',
+        title: 'Playwright trace captured',
+        detail: `${redactUrl(input.target)} - ${input.traceArchive.byteLength} bytes (raw_local_only)`,
+        entityId: traceEvidence.id,
+      });
+    }
+
+    if (input.videoRecording) {
+      const videoEvidence = this.evidence.addEvidence({
+        runId,
+        kind: 'replay_bundle',
+        content: input.videoRecording,
+        redactionState: 'raw_local_only',
+      });
+      videoEvidenceId = videoEvidence.id;
+      evidenceIds.push(videoEvidence.id);
+      this.events?.record({
+        runId,
+        type: 'browser.snapshot.captured',
+        title: 'Browser video captured',
+        detail: `${redactUrl(input.target)} - ${input.videoRecording.byteLength} bytes (raw_local_only)`,
+        entityId: videoEvidence.id,
+      });
     }
 
     if (input.textPreview || input.consoleMessages.length > 0 || input.network.length > 0) {
@@ -339,6 +420,9 @@ export class BrowserSessionService {
       screenshotBytes,
       screenshotContentType,
       textPreviewTruncated,
+      harEvidenceId,
+      traceEvidenceId,
+      videoEvidenceId,
       createdAt: nowIso(),
     };
     this.store.state.browserSnapshots[snapshot.id] = snapshot;
@@ -453,8 +537,15 @@ class DynamicPlaywrightRuntime implements BrowserAutomationRuntime {
     timeoutMs: number;
     userAgent: string;
     allowRequest: (target: string, method: string) => boolean;
+    captureHar?: boolean;
+    captureTrace?: boolean;
+    captureVideo?: boolean;
   }): Promise<BrowserAutomationNavigation> {
-    const session = await this.ensureSession(input.sessionId, input.userAgent);
+    const session = await this.ensureSession(input.sessionId, input.userAgent, {
+      captureHar: input.captureHar,
+      captureTrace: input.captureTrace,
+      captureVideo: input.captureVideo,
+    });
     this.guards.set(input.sessionId, input.allowRequest);
     session.consoleMessages.length = 0;
     session.networkEvents.length = 0;
@@ -466,6 +557,38 @@ class DynamicPlaywrightRuntime implements BrowserAutomationRuntime {
     const title = await session.page.title();
     const bodyText = (await session.page.locator('body').textContent({ timeout: 1000 }).catch(() => '')) ?? '';
     const screenshot = await session.page.screenshot({ type: 'png', fullPage: true }).catch(() => undefined);
+
+    let harArchive: Buffer | undefined;
+    let traceArchive: Buffer | undefined;
+    let videoRecording: Buffer | undefined;
+
+    if (input.captureHar && session.harPath) {
+      try {
+        const { readFileSync } = await import('node:fs');
+        harArchive = readFileSync(session.harPath);
+      } catch {
+        // HAR capture failed, continue without it
+      }
+    }
+
+    if (input.captureTrace && session.tracePath) {
+      try {
+        const { readFileSync } = await import('node:fs');
+        traceArchive = readFileSync(session.tracePath);
+      } catch {
+        // Trace capture failed, continue without it
+      }
+    }
+
+    if (input.captureVideo && session.videoPath) {
+      try {
+        const { readFileSync } = await import('node:fs');
+        videoRecording = readFileSync(session.videoPath);
+      } catch {
+        // Video capture failed, continue without it
+      }
+    }
+
     return {
       finalUrl: session.page.url(),
       title,
@@ -478,6 +601,9 @@ class DynamicPlaywrightRuntime implements BrowserAutomationRuntime {
       textPreview: bodyText,
       consoleMessages: [...session.consoleMessages],
       networkEvents: [...session.networkEvents],
+      harArchive,
+      traceArchive,
+      videoRecording,
     };
   }
 
@@ -486,18 +612,103 @@ class DynamicPlaywrightRuntime implements BrowserAutomationRuntime {
     if (!session) {
       return;
     }
+
+    // Stop trace if active
+    if (session.tracePath) {
+      try {
+        await session.context.tracing.stop({ path: session.tracePath });
+      } catch {
+        // Trace stop failed, continue cleanup
+      }
+    }
+
+    // Get video path before closing
+    const videoHandle = session.page.video();
+    if (videoHandle) {
+      try {
+        session.videoPath = await videoHandle.path();
+      } catch {
+        // Video path retrieval failed
+      }
+    }
+
     await session.context.close().catch(() => undefined);
     this.sessions.delete(sessionId);
     this.guards.delete(sessionId);
+
+    // Clean up temporary files after a delay to allow evidence capture
+    setTimeout(() => {
+      this.cleanupSessionFiles(sessionId, session);
+    }, 5000);
   }
 
-  private async ensureSession(sessionId: string, userAgent: string): Promise<PlaywrightRuntimeSession> {
+  private async cleanupSessionFiles(sessionId: string, session: PlaywrightRuntimeSession): Promise<void> {
+    try {
+      const { unlinkSync, rmSync } = await import('node:fs');
+      if (session.harPath) {
+        try {
+          unlinkSync(session.harPath);
+        } catch {
+          // Ignore cleanup errors
+        }
+      }
+      if (session.tracePath) {
+        try {
+          unlinkSync(session.tracePath);
+        } catch {
+          // Ignore cleanup errors
+        }
+      }
+      if (session.videoPath) {
+        try {
+          unlinkSync(session.videoPath);
+          // Also try to remove the video directory
+          const { dirname } = await import('node:path');
+          rmSync(dirname(session.videoPath), { recursive: true, force: true });
+        } catch {
+          // Ignore cleanup errors
+        }
+      }
+    } catch {
+      // Ignore all cleanup errors
+    }
+  }
+
+  private async ensureSession(sessionId: string, userAgent: string, capture?: { captureHar?: boolean; captureTrace?: boolean; captureVideo?: boolean }): Promise<PlaywrightRuntimeSession> {
     const existing = this.sessions.get(sessionId);
     if (existing) {
       return existing;
     }
     const browser = await this.ensureBrowser();
-    const context = await browser.newContext({ userAgent });
+    const contextOptions: PlaywrightContextOptions = { userAgent };
+
+    let harPath: string | undefined;
+    let tracePath: string | undefined;
+    let videoPath: string | undefined;
+
+    if (capture?.captureHar) {
+      const { tmpdir } = await import('node:os');
+      const { join } = await import('node:path');
+      harPath = join(tmpdir(), `playwright-har-${sessionId}.har`);
+      contextOptions.recordHar = { path: harPath };
+    }
+
+    if (capture?.captureVideo) {
+      const { tmpdir } = await import('node:os');
+      const { join } = await import('node:path');
+      const videoDir = join(tmpdir(), `playwright-video-${sessionId}`);
+      contextOptions.recordVideo = { dir: videoDir };
+    }
+
+    const context = await browser.newContext(contextOptions);
+
+    if (capture?.captureTrace) {
+      const { tmpdir } = await import('node:os');
+      const { join } = await import('node:path');
+      tracePath = join(tmpdir(), `playwright-trace-${sessionId}.zip`);
+      await context.tracing.start({ screenshots: true, snapshots: true });
+    }
+
     await context.route('**/*', async (route) => {
       const request = route.request();
       const guard = this.guards.get(sessionId);
@@ -508,7 +719,15 @@ class DynamicPlaywrightRuntime implements BrowserAutomationRuntime {
       await route.abort('blockedbyclient');
     });
     const page = await context.newPage();
-    const session: PlaywrightRuntimeSession = { page, context, consoleMessages: [], networkEvents: [] };
+    const session: PlaywrightRuntimeSession = {
+      page,
+      context,
+      consoleMessages: [],
+      networkEvents: [],
+      harPath,
+      tracePath,
+      videoPath: contextOptions.recordVideo ? undefined : undefined, // Will be set after page closes
+    };
     page.on('console', (message) => {
       if (session.consoleMessages.length < CONSOLE_MESSAGE_LIMIT) {
         session.consoleMessages.push({ type: message.type(), text: message.text() });
@@ -540,13 +759,23 @@ class DynamicPlaywrightRuntime implements BrowserAutomationRuntime {
 }
 
 interface PlaywrightBrowser {
-  newContext(input: { userAgent: string }): Promise<PlaywrightContext>;
+  newContext(input: PlaywrightContextOptions): Promise<PlaywrightContext>;
+}
+
+interface PlaywrightContextOptions {
+  userAgent: string;
+  recordHar?: { path: string };
+  recordVideo?: { dir: string };
 }
 
 interface PlaywrightContext {
   route(pattern: string, handler: (route: PlaywrightRoute) => Promise<void>): Promise<void>;
   newPage(): Promise<PlaywrightPage>;
   close(): Promise<void>;
+  tracing: {
+    start(options: { screenshots: boolean; snapshots: boolean }): Promise<void>;
+    stop(options: { path: string }): Promise<void>;
+  };
 }
 
 interface PlaywrightRoute {
@@ -564,6 +793,7 @@ interface PlaywrightPage {
   locator(selector: string): { textContent(input: { timeout: number }): Promise<string | null> };
   screenshot(input: { type: string; fullPage: boolean }): Promise<Buffer>;
   url(): string;
+  video(): { path(): Promise<string> } | null;
 }
 
 interface PlaywrightConsoleMessage {
@@ -590,6 +820,9 @@ interface PlaywrightRuntimeSession {
   context: PlaywrightContext;
   consoleMessages: BrowserConsoleMessage[];
   networkEvents: BrowserNetworkEvent[];
+  harPath?: string;
+  tracePath?: string;
+  videoPath?: string;
 }
 
 function limitText(value: string, maxLength: number): { text: string; truncated: boolean } {
@@ -619,4 +852,79 @@ function playwrightExtraHeaders(headers: Record<string, string>): Record<string,
     }
   }
   return extraHeaders;
+}
+
+function redactHarArchive(harBuffer: Buffer): Buffer {
+  try {
+    const harText = harBuffer.toString('utf-8');
+    const har = JSON.parse(harText);
+
+    // Redact HAR entries
+    if (har.log?.entries) {
+      for (const entry of har.log.entries) {
+        // Redact request
+        if (entry.request) {
+          entry.request.url = redactUrl(entry.request.url);
+          if (entry.request.headers) {
+            entry.request.headers = entry.request.headers.map((h: { name: string; value: string }) => ({
+              name: h.name,
+              value: redactSensitiveHeaderValue(h.name, h.value),
+            }));
+          }
+          if (entry.request.cookies) {
+            entry.request.cookies = entry.request.cookies.map((c: { name: string; value: string }) => ({
+              ...c,
+              value: '[REDACTED]',
+            }));
+          }
+          if (entry.request.postData?.text) {
+            entry.request.postData.text = redactText(entry.request.postData.text);
+          }
+          if (entry.request.queryString) {
+            entry.request.queryString = entry.request.queryString.map((q: { name: string; value: string }) => ({
+              name: q.name,
+              value: redactText(q.value),
+            }));
+          }
+        }
+
+        // Redact response
+        if (entry.response) {
+          if (entry.response.headers) {
+            entry.response.headers = entry.response.headers.map((h: { name: string; value: string }) => ({
+              name: h.name,
+              value: redactSensitiveHeaderValue(h.name, h.value),
+            }));
+          }
+          if (entry.response.cookies) {
+            entry.response.cookies = entry.response.cookies.map((c: { name: string; value: string }) => ({
+              ...c,
+              value: '[REDACTED]',
+            }));
+          }
+          if (entry.response.content?.text) {
+            entry.response.content.text = redactText(entry.response.content.text).slice(0, 10_000);
+          }
+        }
+      }
+    }
+
+    // Redact creator info
+    if (har.log?.creator) {
+      har.log.creator.comment = 'Redacted by AgentRed';
+    }
+
+    return Buffer.from(JSON.stringify(har, null, 2), 'utf-8');
+  } catch {
+    // If HAR parsing fails, return redacted placeholder
+    return Buffer.from(JSON.stringify({ log: { version: '1.2', creator: { name: 'AgentRed', version: '0.1' }, entries: [], comment: 'HAR parsing failed - redacted' } }), 'utf-8');
+  }
+}
+
+function redactSensitiveHeaderValue(name: string, value: string): string {
+  const lowerName = name.toLowerCase();
+  if (lowerName === 'authorization' || lowerName === 'cookie' || lowerName === 'set-cookie' || lowerName === 'x-api-key' || lowerName === 'x-auth-token') {
+    return '[REDACTED]';
+  }
+  return redactText(value);
 }

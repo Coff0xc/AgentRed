@@ -4,10 +4,8 @@ import { AgentHarnessService } from './agents/agent-harness-service.js';
 import { AgentWorkbenchService } from './agents/agent-workbench-service.js';
 import { AccessReviewService } from './access/access-review-service.js';
 import { ApprovalService } from './approvals/approval-service.js';
-import { BenchmarkService } from './benchmark/benchmark-service.js';
-import { ScenarioLoader } from './benchmark/scenario-loader.js';
-import { ExecutorEngine } from './benchmark/executor-engine.js';
-import { ScorerEngine } from './benchmark/scorer-engine.js';
+import { BenchmarkSuiteService } from './benchmark/benchmark-suite.js';
+import { BenchmarkScorerService } from './benchmark/benchmark-scorer.js';
 import {
   BrowserSessionService,
   createPlaywrightRuntimeFromEnv,
@@ -18,7 +16,6 @@ import { CloudIamImportService } from './cloud/cloud-iam-import-service.js';
 import { ConnectorRunService } from './connectors/connector-run-service.js';
 import { ConnectorRegistryService } from './connectors/connector-registry-service.js';
 import { EcosystemCoverageService } from './connectors/ecosystem-coverage-service.js';
-import { McpExecutionService } from './connectors/mcp-execution-service.js';
 import { ToolIntegrationBacklogService } from './connectors/tool-integration-backlog-service.js';
 import { CredentialReferenceService } from './credentials/credential-reference-service.js';
 import { DesktopRunnerReadinessService } from './desktop/desktop-runner-readiness-service.js';
@@ -44,6 +41,7 @@ import { RunCapabilityRadarService } from './observability/run-capability-radar-
 import { WorkerLeaderboardService } from './observability/worker-leaderboard-service.js';
 import { WorkerEvaluationPlanService } from './observability/worker-evaluation-plan-service.js';
 import { VulnerabilityLifecycleService } from './observability/vulnerability-lifecycle-service.js';
+import { PyritScenarioLibraryService } from './observability/pyrit-scenario-library-service.js';
 import { PocTemplateService } from './poc/poc-template-service.js';
 import { RunScorecardService } from './observability/run-scorecard-service.js';
 import { RunExportService } from './reports/run-export-service.js';
@@ -94,7 +92,6 @@ export interface Platform {
   ecosystemCoverage: EcosystemCoverageService;
   toolIntegrationBacklog: ToolIntegrationBacklogService;
   connectorRuns: ConnectorRunService;
-  mcp: McpExecutionService;
   skills: DomainSkillService;
   skillReadiness: DomainSkillReadinessService;
   pocs: PocTemplateService;
@@ -106,12 +103,15 @@ export interface Platform {
   capabilityRadar: RunCapabilityRadarService;
   workerLeaderboard: WorkerLeaderboardService;
   workerEvaluationPlan: WorkerEvaluationPlanService;
+  benchmarkSuite: BenchmarkSuiteService;
+  benchmarkScorer: BenchmarkScorerService;
   scorecards: RunScorecardService;
   evidenceQuality: EvidenceQualityService;
   deliveryReadiness: DeliveryReadinessService;
   enterprisePentestScorer: EnterprisePentestScorerService;
   vulnerabilityLifecycle: VulnerabilityLifecycleService;
   referenceBenchmark: ReferenceBenchmarkService;
+  pyritScenarioLibrary: PyritScenarioLibraryService;
   missionControl: AssessmentMissionControlService;
   supervisor: RunSupervisorService;
   runtimeOperationsWorkbench: RuntimeOperationsWorkbenchService;
@@ -130,12 +130,7 @@ export interface Platform {
   agentFramework: AgentFrameworkService;
   agentHarness: AgentHarnessService;
   agentWorkbench: AgentWorkbenchService;
-  benchmark: BenchmarkService;
 }
-
-// Re-export for convenience
-export { GraphServer } from './graph/graph-server.js';
-export { Dispatcher } from './dispatcher/dispatcher.js';
 
 export interface CreatePlatformOptions {
   databasePath?: string;
@@ -151,6 +146,8 @@ export function createPlatform(options: CreatePlatformOptions = {}): Platform {
   const capabilityRadar = new RunCapabilityRadarService(store);
   const workerLeaderboard = new WorkerLeaderboardService(store);
   const workerEvaluationPlan = new WorkerEvaluationPlanService(store);
+  const benchmarkSuite = new BenchmarkSuiteService(store);
+  const benchmarkScorer = new BenchmarkScorerService(store);
   const scorecards = new RunScorecardService(store);
   const evidenceQuality = new EvidenceQualityService(store);
   const deliveryReadiness = new DeliveryReadinessService(store);
@@ -180,7 +177,6 @@ export function createPlatform(options: CreatePlatformOptions = {}): Platform {
   const connectors = new ConnectorRegistryService(store, graph, events);
   const ecosystemCoverage = new EcosystemCoverageService(connectors, toolbox);
   const toolIntegrationBacklog = new ToolIntegrationBacklogService(ecosystemCoverage);
-  const mcp = new McpExecutionService(store, evidence, events);
   const skills = new DomainSkillService(store, graph, events);
   const skillReadiness = new DomainSkillReadinessService(store, skills);
   const pocs = new PocTemplateService(store, graph, events);
@@ -197,7 +193,6 @@ export function createPlatform(options: CreatePlatformOptions = {}): Platform {
     accessReviews,
     oast,
     scannerResults,
-    mcp,
   );
   const toolPacks = new ToolPackService(store, tools, events);
   const connectorRuns = new ConnectorRunService(store, connectors, tools, events);
@@ -243,6 +238,7 @@ export function createPlatform(options: CreatePlatformOptions = {}): Platform {
     toolIntegrationBacklog,
     deliveryReadiness,
   );
+  const pyritScenarioLibrary = new PyritScenarioLibraryService(store);
   const missionControl = new AssessmentMissionControlService(
     store,
     events,
@@ -265,13 +261,6 @@ export function createPlatform(options: CreatePlatformOptions = {}): Platform {
     localRunnerWorkbench,
   );
   const supervisor = new RunSupervisorService(store, graph);
-  const benchmark = new BenchmarkService({
-    graphServer: graph,
-    dispatcher,
-    scenarioLoader: new ScenarioLoader(),
-    executorEngine: new ExecutorEngine(),
-    scorerEngine: new ScorerEngine(),
-  });
   return {
     store,
     events,
@@ -298,7 +287,6 @@ export function createPlatform(options: CreatePlatformOptions = {}): Platform {
     ecosystemCoverage,
     toolIntegrationBacklog,
     connectorRuns,
-    mcp,
     skills,
     skillReadiness,
     pocs,
@@ -310,12 +298,15 @@ export function createPlatform(options: CreatePlatformOptions = {}): Platform {
     capabilityRadar,
     workerLeaderboard,
     workerEvaluationPlan,
+    benchmarkSuite,
+    benchmarkScorer,
     scorecards,
     evidenceQuality,
     deliveryReadiness,
     enterprisePentestScorer,
     vulnerabilityLifecycle,
     referenceBenchmark,
+    pyritScenarioLibrary,
     missionControl,
     supervisor,
     runtimeOperationsWorkbench,
@@ -334,6 +325,5 @@ export function createPlatform(options: CreatePlatformOptions = {}): Platform {
     agentFramework,
     agentHarness,
     agentWorkbench,
-    benchmark,
   };
 }

@@ -19,6 +19,7 @@ import type {
   RegisteredConnector,
   RegisteredToolboxBundle,
   RunExport,
+  RunCheckpoint,
   RunConnectorBinding,
   RunToolboxBundleBinding,
   RunPocTemplateBinding,
@@ -40,6 +41,7 @@ import type {
   ToolPackRun,
   ToolInvocation,
 } from '../domain/types.js';
+import type { PyritScenario, PyritScenarioImport, PyritScenarioRunResult } from '../observability/pyrit-scenario-library-service.js';
 
 export interface EvidenceBlob {
   encoding: 'utf8' | 'base64';
@@ -86,6 +88,10 @@ export interface PlatformState {
   traceSpans: Record<string, TraceSpan>;
   costLedger: Record<string, CostLedgerEntry>;
   evaluations: Record<string, RunEvaluation>;
+  checkpoints: Record<string, RunCheckpoint>;
+  pyritScenarios?: Record<string, PyritScenario>;
+  pyritScenarioImports?: Record<string, PyritScenarioImport>;
+  pyritScenarioResults?: Record<string, PyritScenarioRunResult>;
 }
 
 export interface PlatformStore {
@@ -133,6 +139,7 @@ export function emptyState(): PlatformState {
     traceSpans: {},
     costLedger: {},
     evaluations: {},
+    checkpoints: {},
   };
 }
 
@@ -178,6 +185,7 @@ function normalizeState(state: Partial<PlatformState>): PlatformState {
     traceSpans: state.traceSpans ?? {},
     costLedger: state.costLedger ?? {},
     evaluations: state.evaluations ?? {},
+    checkpoints: state.checkpoints ?? {},
   };
 }
 

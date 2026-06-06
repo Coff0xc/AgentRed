@@ -10,6 +10,7 @@ export type WorkerSelectionDecision = 'recommended' | 'eligible' | 'warm_up' | '
 export interface WorkerSelectionCandidate {
   worker: string;
   type: WorkerConfig['type'];
+  role?: WorkerConfig['role'];
   priority: number;
   maxRunning: number;
   commandConfigured: boolean;
@@ -41,6 +42,7 @@ export interface WorkerSelectionPolicyReport {
     id: string;
     status: Intent['status'];
     riskLevel: Intent['riskLevel'];
+    role?: Intent['role'];
     hypothesis: string;
   };
   selectedWorker?: WorkerSelectionCandidate;
@@ -116,6 +118,7 @@ export class WorkerSelectionPolicyService {
             id: intent.id,
             status: intent.status,
             riskLevel: intent.riskLevel,
+            role: intent.role,
             hypothesis: intent.hypothesis,
           }
         : undefined,
@@ -129,12 +132,16 @@ export class WorkerSelectionPolicyService {
           'Healthy runtime and configured command are required before a Worker can be recommended.',
           'Run priority, current-run success, cross-run leaderboard score, timeout rate, evidence contribution, and finding influence shape the rank.',
           'Explore tasks prefer Workers with evidence-producing history; bootstrap and reason tasks can warm up unexercised Workers.',
+          'When intent.role matches worker.role (scout|exploit|credential), the worker receives a +20 score boost for specialization.',
+          'Generalist workers or workers without a role assignment can handle any intent without penalty.',
+          'Specialized workers (non-generalist) receive a -8 penalty when handling intents outside their role.',
           'This view recommends scheduling order only; Dispatcher, Tool Gateway, ScopePolicy, approvals, and evidence validation remain authoritative.',
         ],
         safetyNotes: [
           'Read-only preview: no Worker execution, no intent claim, no graph write, no approval decision, and no tool invocation.',
           'Workers cannot submit or override their own selection score.',
           'R3/R4 tool requests still stop at approval or deny gates even when a Worker is recommended.',
+          'Role-based matching is a scheduling hint; all workers still operate under the same security boundaries.',
         ],
       },
     };
@@ -246,6 +253,21 @@ function buildCandidate(input: {
       if (input.intent?.riskLevel === 'R4') {
         reasons.push('R4 tool requests remain denied by Tool Gateway policy');
       }
+      // Role-based matching: boost score when worker role matches intent role
+      if (input.intent?.role && input.config.role) {
+        if (input.intent.role === input.config.role) {
+          score += 20;
+          reasons.push(`role match: ${input.config.role} worker for ${input.intent.role} intent`);
+        } else if (input.config.role !== 'generalist') {
+          score -= 8;
+          reasons.push(`role mismatch: ${input.config.role} worker for ${input.intent.role} intent`);
+        }
+      } else if (input.config.role === 'generalist' || !input.config.role) {
+        // Generalist workers or workers without role can handle any intent
+        if (input.intent?.role) {
+          reasons.push(`generalist handling ${input.intent.role} intent`);
+        }
+      }
     }
     if (input.task === 'reason' && evidenceContributed === 0 && findingsInfluenced === 0 && tasks > 0) {
       score += 6;
@@ -260,6 +282,7 @@ function buildCandidate(input: {
   return {
     worker: input.config.name,
     type: input.config.type,
+    role: input.config.role,
     priority: input.config.priority,
     maxRunning: input.config.maxRunning,
     commandConfigured,

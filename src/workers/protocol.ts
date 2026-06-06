@@ -101,6 +101,7 @@ export function buildWorkerProtocolEnvelope(task: WorkerTask): WorkerProtocolEnv
         'Credentials are represented only as credentialReferences; never ask for or emit raw secret material.',
         'Every candidate finding must reference evidence through finding.propose.',
         'Use sessionSummary to avoid repeating concluded intents, already-proposed findings, and failed hypotheses.',
+        'When proposing intents during reason phase, optionally specify role (scout|exploit|credential|generalist) to categorize exploration paths for worker specialization.',
       ],
       toolUse: [
         'Request high-level tools only through data.toolRequests.',
@@ -291,6 +292,7 @@ function workerOutputSchema(): Record<string, unknown> {
         description: 'string optional for reason',
         from: 'string[]',
         riskLevel: 'R0|R1|R2|R3|R4 optional',
+        role: 'scout|exploit|credential|generalist optional; categorizes exploration path for worker specialization',
       },
       description: 'string optional for explore conclusion',
       continueExplore: 'boolean optional; set true to request another explore round after toolRequests execute',

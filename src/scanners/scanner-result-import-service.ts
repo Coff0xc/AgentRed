@@ -145,6 +145,18 @@ function normalizeScannerResults(engine: ScannerResultEngine, raw: string): Norm
   if (engine === 'tlsx') {
     return normalizeTlsx(raw);
   }
+  if (engine === 'llm_fingerprint') {
+    return normalizeLlmFingerprint(raw);
+  }
+  if (engine === 'prompt_injection') {
+    return normalizePromptInjection(raw);
+  }
+  if (engine === 'rag_exposure') {
+    return normalizeRagExposure(raw);
+  }
+  if (engine === 'mcp_audit') {
+    return normalizeMcpAudit(raw);
+  }
   return normalizeGeneric(raw);
 }
 
@@ -556,4 +568,166 @@ function stringArray(value: unknown): string[] {
 
 function safeText(value: string | undefined, maxLength: number): string {
   return redactText(value ?? '').slice(0, maxLength);
+}
+
+function normalizeLlmFingerprint(raw: string): NormalizedScannerIssue[] {
+  return parseJsonLines(raw).map((result, index) => {
+    const target = safeTarget(stringValue(result.target) ?? `llm-endpoint-${index + 1}`);
+    const provider = stringValue(result.provider) ?? 'unknown';
+    const confidence = stringValue(result.confidence) ?? 'low';
+    const authMethod = stringValue(result.authMethod) ?? 'unknown';
+    const modelVersion = stringValue(result.modelVersion);
+    return {
+      engine: 'llm_fingerprint',
+      scannerId: safeText(`llm-fingerprint:${provider}:${target}`, 160),
+      title: `LLM endpoint detected: ${provider}${modelVersion ? ` (${modelVersion})` : ''}`.slice(0, 180),
+      severity: 'info',
+      confidence: 'needs_dynamic_confirmation',
+      affectedAsset: target,
+      description: safeText(
+        [
+          `LLM provider: ${provider}`,
+          modelVersion ? `Model: ${modelVersion}` : '',
+          `Auth: ${authMethod}`,
+          `Confidence: ${confidence}`,
+        ]
+          .filter(Boolean)
+          .join(' | '),
+        700,
+      ),
+      remediation: 'Discovery signal only. Review authentication requirements and security configurations.',
+      evidenceSummary: {
+        provider,
+        modelVersion,
+        authMethod,
+        confidence,
+      },
+    };
+  });
+}
+
+function normalizePromptInjection(raw: string): NormalizedScannerIssue[] {
+  return parseJsonLines(raw).map((result, index) => {
+    const target = safeTarget(stringValue(result.target) ?? `prompt-injection-${index + 1}`);
+    const probeId = safeText(stringValue(result.probeId) ?? `probe-${index + 1}`, 120);
+    const vulnerable = result.vulnerable === true;
+    const category = stringValue(result.probeCategory) ?? 'unknown';
+    const confidence = stringValue(result.confidence) ?? 'low';
+    const severity = vulnerable ? (stringValue(result.severity) as 'high' | 'medium' | 'low' | undefined) ?? 'medium' : 'info';
+    return {
+      engine: 'prompt_injection',
+      scannerId: probeId,
+      title: vulnerable
+        ? `${severityLabel(severity)} prompt injection: ${category}`.slice(0, 180)
+        : `Prompt injection test passed: ${category}`.slice(0, 180),
+      severity,
+      confidence: vulnerable ? (confidence === 'high' ? 'likely' : 'needs_dynamic_confirmation') : 'needs_dynamic_confirmation',
+      affectedAsset: target,
+      description: safeText(
+        vulnerable
+          ? `Prompt injection vulnerability detected via ${probeId}. Category: ${category}. The LLM accepted malicious instructions.`
+          : `Prompt injection probe ${probeId} did not trigger vulnerability. Model resisted ${category} attack.`,
+        700,
+      ),
+      remediation: vulnerable
+        ? 'Implement input validation, use system message isolation, and add content filtering for prompt injection patterns.'
+        : 'Continue monitoring. Test with additional probe variations.',
+      evidenceSummary: {
+        probeId,
+        category,
+        vulnerable,
+        confidence,
+        detectedSignals: arrayValue(result.detectedSignals) ?? [],
+      },
+    };
+  });
+}
+
+function normalizeRagExposure(raw: string): NormalizedScannerIssue[] {
+  return parseJsonLines(raw).map((result, index) => {
+    const target = safeTarget(stringValue(result.target) ?? `rag-db-${index + 1}`);
+    const databaseType = stringValue(result.databaseType) ?? 'unknown';
+    const vulnerable = result.vulnerable === true;
+    const exposureTypes = stringArray(result.exposureType);
+    const piiDetected = result.piiDetected === true;
+    const authRequired = result.authenticationRequired === true;
+    const severity = piiDetected ? 'critical' : vulnerable ? 'high' : 'info';
+    const title =
+      exposureTypes.length > 0
+        ? `${severityLabel(severity)} RAG exposure: ${exposureTypes[0]}`.slice(0, 180)
+        : `RAG database discovered: ${databaseType}`.slice(0, 180);
+    return {
+      engine: 'rag_exposure',
+      scannerId: safeText(`rag:${databaseType}:${target}`, 160),
+      title,
+      severity,
+      confidence: piiDetected ? 'likely' : vulnerable ? 'needs_dynamic_confirmation' : 'needs_dynamic_confirmation',
+      affectedAsset: target,
+      description: safeText(
+        [
+          `Vector database: ${databaseType}`,
+          authRequired ? 'Authentication required' : 'No authentication',
+          piiDetected ? `PII detected: ${stringArray(result.sensitiveDataTypes).join(', ')}` : '',
+          exposureTypes.length > 0 ? `Exposure types: ${exposureTypes.join(', ')}` : '',
+        ]
+          .filter(Boolean)
+          .join(' | '),
+        700,
+      ),
+      remediation: vulnerable
+        ? 'Enable authentication, implement access controls, sanitize sensitive data, and restrict public endpoints.'
+        : 'Verify access controls and monitor for data exposure.',
+      evidenceSummary: {
+        databaseType,
+        exposureTypes,
+        piiDetected,
+        authRequired,
+        sensitiveDataTypes: stringArray(result.sensitiveDataTypes).slice(0, 10),
+        collectionCount: typeof result.collectionCount === 'number' ? result.collectionCount : undefined,
+        documentCount: typeof result.documentCount === 'number' ? result.documentCount : undefined,
+      },
+    };
+  });
+}
+
+function normalizeMcpAudit(raw: string): NormalizedScannerIssue[] {
+  return parseJsonLines(raw).map((result, index) => {
+    const target = safeTarget(stringValue(result.target) ?? `mcp-server-${index + 1}`);
+    const serverName = stringValue(result.serverName);
+    const vulnerable = result.vulnerable === true;
+    const riskScore = typeof result.riskScore === 'number' ? result.riskScore : 0;
+    const dangerousPerms = stringArray(result.dangerousPermissions);
+    const toolPoisoning = result.toolPoisoningRisk === true;
+    const severity = riskScore >= 75 ? 'critical' : riskScore >= 50 ? 'high' : riskScore >= 25 ? 'medium' : 'low';
+    return {
+      engine: 'mcp_audit',
+      scannerId: safeText(`mcp:${serverName || target}`, 160),
+      title: `${severityLabel(severity)} MCP security issue${serverName ? `: ${serverName}` : ''}`.slice(0, 180),
+      severity,
+      confidence: riskScore >= 50 ? 'likely' : 'needs_dynamic_confirmation',
+      affectedAsset: target,
+      description: safeText(
+        [
+          serverName ? `Server: ${serverName}` : '',
+          `Risk score: ${riskScore}/100`,
+          dangerousPerms.length > 0 ? `Dangerous permissions: ${dangerousPerms.join(', ')}` : '',
+          toolPoisoning ? 'Tool poisoning risk detected' : '',
+          `Total findings: ${typeof result.totalFindings === 'number' ? result.totalFindings : 0}`,
+        ]
+          .filter(Boolean)
+          .join(' | '),
+        700,
+      ),
+      remediation:
+        'Review MCP server configuration, restrict dangerous permissions, validate tool schemas, and enable authentication.',
+      evidenceSummary: {
+        serverName,
+        riskScore,
+        dangerousPermissions: dangerousPerms.slice(0, 10),
+        schemaVulnerabilities: stringArray(result.schemaVulnerabilities).slice(0, 10),
+        toolPoisoningRisk: toolPoisoning,
+        totalFindings: typeof result.totalFindings === 'number' ? result.totalFindings : 0,
+      },
+    };
+  });
 }

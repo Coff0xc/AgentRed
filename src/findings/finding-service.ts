@@ -41,6 +41,9 @@ export class FindingService {
       remediation: input.remediation,
       validationState: 'candidate',
       createdAt: nowIso(),
+      cvss40: input.cvss40,
+      attackMappings: input.attackMappings,
+      cweIds: input.cweIds,
     };
     this.store.state.findings[finding.id] = finding;
     this.events?.record({

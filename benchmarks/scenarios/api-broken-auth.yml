@@ -1,0 +1,47 @@
+# API Broken Authentication Benchmark Scenario
+id: api-broken-auth
+category: api_security
+title: API Broken Authentication
+description: API endpoints with missing or weak authentication mechanisms
+target: http://juice-shop.local/rest/user/login
+goal: Identify API authentication weaknesses and demonstrate bypass
+
+expectedFindings:
+  - title: API Broken Authentication
+    severity: critical
+    mustHaveEvidence:
+      - http_exchange
+
+successCriteria:
+  minFindingsConfirmed: 1
+  maxFalsePositives: 3
+  maxTimeSeconds: 720
+
+tags:
+  - api
+  - auth
+  - owasp-api-02
+  - rest-api
+
+difficulty: medium
+dockerTargetService: juice-shop
+
+# Test hints for Worker
+testHints:
+  - Analyze API endpoints for missing authentication
+  - Test for JWT token vulnerabilities (weak secret, algorithm confusion)
+  - Check for API key exposure or weak API keys
+  - Try SQL injection in login API parameters
+
+# Expected evidence characteristics
+evidenceRequirements:
+  - kind: http_exchange
+    description: API requests showing authentication bypass or weakness
+    minCount: 2
+
+# Success indicators
+successIndicators:
+  - Authentication bypass successful
+  - JWT token manipulation successful
+  - API endpoints accessible without proper authentication
+  - SQL injection in API authentication

@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AgentRed - Real-time Evidence & Finding Monitor</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      background: #1a1a1a;
+      color: #e0e0e0;
+      padding: 20px;
+    }
+
+    .container {
+      max-width: 1400px;
+      margin: 0 auto;
+    }
+
+    header {
+      background: #2a2a2a;
+      padding: 20px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      border-left: 4px solid #4CAF50;
+    }
+
+    h1 {
+      font-size: 24px;
+      margin-bottom: 10px;
+    }
+
+    .connection-form {
+      display: flex;
+      gap: 10px;
+      margin-top: 15px;
+      flex-wrap: wrap;
+    }
+
+    input {
+      flex: 1;
+      min-width: 200px;
+      padding: 10px;
+      background: #333;
+      border: 1px solid #444;
+      color: #fff;
+      border-radius: 4px;
+      font-size: 14px;
+    }
+
+    button {
+      padding: 10px 20px;
+      background: #4CAF50;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 600;
+      transition: background 0.3s;
+    }
+
+    button:hover:not(:disabled) {
+      background: #45a049;
+    }
+
+    button:disabled {
+      background: #666;
+      cursor: not-allowed;
+    }
+
+    button.disconnect {
+      background: #f44336;
+    }
+
+    button.disconnect:hover {
+      background: #da190b;
+    }
+
+    .status {
+      display: inline-block;
+      padding: 5px 10px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: 600;
+      margin-left: 10px;
+    }
+
+    .status.connected {
+      background: #4CAF50;
+      color: white;
+    }
+
+    .status.disconnected {
+      background: #f44336;
+      color: white;
+    }
+
+    .dashboard {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 15px;
+      margin-bottom: 20px;
+    }
+
+    .stat-card {
+      background: #2a2a2a;
+      padding: 20px;
+      border-radius: 8px;
+      border-left: 4px solid #4CAF50;
+    }
+
+    .stat-card h3 {
+      font-size: 14px;
+      color: #999;
+      margin-bottom: 10px;
+      text-transform: uppercase;
+    }
+
+    .stat-card .value {
+      font-size: 32px;
+      font-weight: 700;
+      color: #4CAF50;
+    }
+
+    .events {
+      background: #2a2a2a;
+      border-radius: 8px;
+      padding: 20px;
+    }
+
+    .events h2 {
+      font-size: 18px;
+      margin-bottom: 15px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid #444;
+    }
+
+    .event-list {
+      max-height: 600px;
+      overflow-y: auto;
+    }
+
+    .event {
+      padding: 12px;
+      background: #333;
+      border-radius: 4px;
+      margin-bottom: 8px;
+      border-left: 4px solid #666;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .event .event-type {
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+
+    .event .event-time {
+      color: #999;
+      font-size: 11px;
+      margin-right: 10px;
+    }
+
+    .event.evidence {
+      border-left-color: #2196F3;
+    }
+
+    .event.finding-proposed {
+      border-left-color: #FFC107;
+    }
+
+    .event.finding-validated {
+      border-left-color: #4CAF50;
+    }
+
+    .event.connection {
+      border-left-color: #9C27B0;
+    }
+
+    .filters {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 15px;
+      flex-wrap: wrap;
+    }
+
+    .filter-btn {
+      padding: 8px 15px;
+      background: #333;
+      border: 1px solid #444;
+      color: #999;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+      transition: all 0.3s;
+    }
+
+    .filter-btn.active {
+      background: #4CAF50;
+      color: white;
+      border-color: #4CAF50;
+    }
+
+    .clear-btn {
+      padding: 8px 15px;
+      background: #f44336;
+      font-size: 12px;
+      margin-left: auto;
+    }
+
+    .empty-state {
+      text-align: center;
+      padding: 60px 20px;
+      color: #666;
+    }
+
+    .empty-state svg {
+      width: 64px;
+      height: 64px;
+      margin-bottom: 20px;
+      opacity: 0.3;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    .pulse {
+      animation: pulse 2s infinite;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>
+        🔴 AgentRed - Real-time Evidence & Finding Monitor
+        <span class="status disconnected" id="status">Disconnected</span>
+      </h1>
+      <div class="connection-form">
+        <input type="text" id="runId" placeholder="Run ID (e.g., run_abc123)" />
+        <input type="password" id="token" placeholder="API Token" />
+        <input type="text" id="host" placeholder="Host (default: 127.0.0.1:4317)" value="127.0.0.1:4317" />
+        <button id="connectBtn">Connect</button>
+        <button id="disconnectBtn" class="disconnect" style="display:none;">Disconnect</button>
+      </div>
+    </header>
+
+    <div class="dashboard">
+      <div class="stat-card">
+        <h3>Evidence</h3>
+        <div class="value" id="evidenceCount">0</div>
+      </div>
+      <div class="stat-card">
+        <h3>Findings Proposed</h3>
+        <div class="value" id="findingsProposed">0</div>
+      </div>
+      <div class="stat-card">
+        <h3>Findings Confirmed</h3>
+        <div class="value" id="findingsConfirmed">0</div>
+      </div>
+      <div class="stat-card">
+        <h3>Total Events</h3>
+        <div class="value" id="totalEvents">0</div>
+      </div>
+    </div>
+
+    <div class="events">
+      <h2>Event Stream</h2>
+      <div class="filters">
+        <button class="filter-btn active" data-filter="all">All</button>
+        <button class="filter-btn" data-filter="evidence.added">Evidence</button>
+        <button class="filter-btn" data-filter="finding.proposed">Finding Proposed</button>
+        <button class="filter-btn" data-filter="finding.validated">Finding Validated</button>
+        <button class="clear-btn" id="clearEvents">Clear</button>
+      </div>
+      <div class="event-list" id="eventList">
+        <div class="empty-state">
+          <svg fill="currentColor" viewBox="0 0 20 20">
+            <path d="M2 6a2 2 0 012-2h6a2 2 0 012 2v8a2 2 0 01-2 2H4a2 2 0 01-2-2V6zM14.553 7.106A1 1 0 0014 8v4a1 1 0 00.553.894l2 1A1 1 0 0018 13V7a1 1 0 00-1.447-.894l-2 1z"></path>
+          </svg>
+          <p>Connect to a run to start monitoring events</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let ws = null;
+    let stats = {
+      evidence: 0,
+      findingsProposed: 0,
+      findingsConfirmed: 0,
+      totalEvents: 0
+    };
+    let currentFilter = 'all';
+
+    const elements = {
+      runId: document.getElementById('runId'),
+      token: document.getElementById('token'),
+      host: document.getElementById('host'),
+      connectBtn: document.getElementById('connectBtn'),
+      disconnectBtn: document.getElementById('disconnectBtn'),
+      status: document.getElementById('status'),
+      evidenceCount: document.getElementById('evidenceCount'),
+      findingsProposed: document.getElementById('findingsProposed'),
+      findingsConfirmed: document.getElementById('findingsConfirmed'),
+      totalEvents: document.getElementById('totalEvents'),
+      eventList: document.getElementById('eventList'),
+      clearEvents: document.getElementById('clearEvents')
+    };
+
+    // Load saved credentials
+    elements.runId.value = localStorage.getItem('runId') || '';
+    elements.token.value = localStorage.getItem('token') || '';
+    elements.host.value = localStorage.getItem('host') || '127.0.0.1:4317';
+
+    // Connect button
+    elements.connectBtn.addEventListener('click', () => {
+      const runId = elements.runId.value.trim();
+      const token = elements.token.value.trim();
+      const host = elements.host.value.trim();
+
+      if (!runId || !token) {
+        alert('Please enter both Run ID and API Token');
+        return;
+      }
+
+      // Save credentials
+      localStorage.setItem('runId', runId);
+      localStorage.setItem('token', token);
+      localStorage.setItem('host', host);
+
+      connect(runId, token, host);
+    });
+
+    // Disconnect button
+    elements.disconnectBtn.addEventListener('click', () => {
+      if (ws) {
+        ws.close();
+      }
+    });
+
+    // Clear events button
+    elements.clearEvents.addEventListener('click', () => {
+      elements.eventList.innerHTML = '<div class="empty-state pulse"><p>Waiting for events...</p></div>';
+    });
+
+    // Filter buttons
+    document.querySelectorAll('.filter-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        currentFilter = btn.dataset.filter;
+        filterEvents();
+      });
+    });
+
+    function connect(runId, token, host) {
+      const wsUrl = `ws://${host}/ws/progress?runId=${runId}&token=${token}`;
+
+      elements.connectBtn.disabled = true;
+      elements.status.textContent = 'Connecting...';
+      elements.status.className = 'status';
+
+      ws = new WebSocket(wsUrl);
+
+      ws.onopen = () => {
+        elements.status.textContent = 'Connected';
+        elements.status.className = 'status connected';
+        elements.connectBtn.style.display = 'none';
+        elements.disconnectBtn.style.display = 'inline-block';
+        addEvent({ type: 'system', data: { detail: 'Connected to WebSocket' } }, 'connection');
+      };
+
+      ws.onmessage = (event) => {
+        const message = JSON.parse(event.data);
+        handleMessage(message);
+      };
+
+      ws.onerror = (error) => {
+        console.error('WebSocket error:', error);
+        addEvent({ type: 'error', data: { detail: 'Connection error' } }, 'connection');
+      };
+
+      ws.onclose = (event) => {
+        elements.status.textContent = 'Disconnected';
+        elements.status.className = 'status disconnected';
+        elements.connectBtn.style.display = 'inline-block';
+        elements.connectBtn.disabled = false;
+        elements.disconnectBtn.style.display = 'none';
+        addEvent({ type: 'system', data: { detail: `Disconnected (${event.code})` } }, 'connection');
+        ws = null;
+      };
+    }
+
+    function handleMessage(message) {
+      stats.totalEvents++;
+      elements.totalEvents.textContent = stats.totalEvents;
+
+      if (message.type === 'evidence.added') {
+        stats.evidence++;
+        elements.evidenceCount.textContent = stats.evidence;
+        addEvent(message, 'evidence');
+      } else if (message.type === 'finding.proposed') {
+        stats.findingsProposed++;
+        elements.findingsProposed.textContent = stats.findingsProposed;
+        addEvent(message, 'finding-proposed');
+      } else if (message.type === 'finding.validated') {
+        if (message.data.detail && message.data.detail.includes('confirmed')) {
+          stats.findingsConfirmed++;
+          elements.findingsConfirmed.textContent = stats.findingsConfirmed;
+        }
+        addEvent(message, 'finding-validated');
+      } else if (message.type === 'connection.established') {
+        addEvent(message, 'connection');
+      } else {
+        addEvent(message, 'other');
+      }
+    }
+
+    function addEvent(message, className) {
+      // Remove empty state if present
+      const emptyState = elements.eventList.querySelector('.empty-state');
+      if (emptyState) {
+        emptyState.remove();
+      }
+
+      const event = document.createElement('div');
+      event.className = `event ${className}`;
+      event.dataset.type = message.type;
+
+      const time = new Date(message.timestamp || Date.now()).toLocaleTimeString();
+      const title = message.data?.title || message.type;
+      const detail = message.data?.detail || '';
+
+      event.innerHTML = `
+        <div class="event-type">
+          <span class="event-time">${time}</span>
+          ${title}
+        </div>
+        ${detail ? `<div>${detail}</div>` : ''}
+        ${message.data?.entityId ? `<div style="color: #666; font-size: 11px; margin-top: 4px;">ID: ${message.data.entityId}</div>` : ''}
+      `;
+
+      elements.eventList.insertBefore(event, elements.eventList.firstChild);
+
+      // Limit to 100 events
+      while (elements.eventList.children.length > 100) {
+        elements.eventList.removeChild(elements.eventList.lastChild);
+      }
+
+      filterEvents();
+    }
+
+    function filterEvents() {
+      const events = elements.eventList.querySelectorAll('.event');
+      events.forEach(event => {
+        if (currentFilter === 'all' || event.dataset.type === currentFilter) {
+          event.style.display = 'block';
+        } else {
+          event.style.display = 'none';
+        }
+      });
+    }
+
+    // Auto-connect if credentials are saved
+    if (elements.runId.value && elements.token.value) {
+      console.log('Auto-connecting with saved credentials...');
+    }
+  </script>
+</body>
+</html>

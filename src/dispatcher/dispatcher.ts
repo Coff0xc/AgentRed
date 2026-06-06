@@ -10,6 +10,7 @@ import type { CredentialReferenceService } from '../credentials/credential-refer
 import type { PocTemplateService } from '../poc/poc-template-service.js';
 import type { ToolboxRunner } from '../tools/toolbox-runner.js';
 import type { ConnectorRegistryService } from '../connectors/connector-registry-service.js';
+import type { CheckpointService } from '../checkpoint/checkpoint-service.js';
 import { buildWorkerProtocolEnvelope, type WorkerProtocolEnvelope } from '../workers/protocol.js';
 import type { WorkerSelectionCandidate, WorkerSelectionPolicyReport, WorkerSelectionPolicyService } from '../scheduling/worker-selection-policy-service.js';
 
@@ -51,6 +52,7 @@ export interface DispatcherOptions {
   pocs?: PocTemplateService;
   toolbox?: ToolboxRunner;
   connectors?: ConnectorRegistryService;
+  checkpoints?: CheckpointService;
   workerSelection?: Pick<WorkerSelectionPolicyService, 'preview'>;
 }
 
@@ -114,6 +116,7 @@ export class Dispatcher {
   private readonly pocs?: PocTemplateService;
   private readonly toolbox?: ToolboxRunner;
   private readonly connectors?: ConnectorRegistryService;
+  private readonly checkpoints?: CheckpointService;
   private readonly workerSelection?: Pick<WorkerSelectionPolicyService, 'preview'>;
 
   constructor(
@@ -131,6 +134,7 @@ export class Dispatcher {
     this.pocs = options.pocs;
     this.toolbox = options.toolbox;
     this.connectors = options.connectors;
+    this.checkpoints = options.checkpoints;
     this.workerSelection = options.workerSelection;
   }
 
@@ -144,6 +148,16 @@ export class Dispatcher {
       return this.finishDispatch(runId, { status: 'skipped', reason: 'run is not active' }, dispatchStartedMs, {
         reason: 'run is not active',
       });
+    }
+
+    // Auto-checkpoint if configured and interval reached
+    if (this.checkpoints?.shouldAutoCheckpoint(runId)) {
+      try {
+        await this.checkpoints.createCheckpoint(runId, 'auto_interval');
+      } catch (error) {
+        // Log but don't block dispatch on checkpoint failure
+        this.record(runId, 'dispatch.started', 'Auto-checkpoint failed', error instanceof Error ? error.message : 'Unknown error', 'warning');
+      }
     }
 
     const workerSelection = await this.selectWorker(runId, snapshot.run.workerPool);
@@ -677,6 +691,11 @@ export class Dispatcher {
     startedMs: number,
     attributes: Record<string, string | number | boolean | undefined>,
   ): T {
+    // Increment dispatch counter for checkpointing
+    if (result.status === 'dispatched') {
+      this.checkpoints?.incrementDispatchCount(runId);
+    }
+
     this.observability?.recordDuration({
       runId,
       kind: 'dispatch',

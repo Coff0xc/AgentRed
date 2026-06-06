@@ -1,0 +1,84 @@
+version: '3.8'
+
+services:
+  # DVWA - Damn Vulnerable Web Application
+  dvwa:
+    image: vulnerables/web-dvwa:latest
+    container_name: benchmark-dvwa
+    ports:
+      - "8080:80"
+    networks:
+      - benchmark-net
+    environment:
+      - MYSQL_HOST=dvwa-mysql
+      - MYSQL_DATABASE=dvwa
+      - MYSQL_USER=dvwa
+      - MYSQL_PASSWORD=p@ssw0rd
+    depends_on:
+      - dvwa-mysql
+    restart: unless-stopped
+    labels:
+      - "benchmark.target=true"
+      - "benchmark.category=owasp_top10"
+
+  dvwa-mysql:
+    image: mysql:5.7
+    container_name: benchmark-dvwa-mysql
+    networks:
+      - benchmark-net
+    environment:
+      - MYSQL_ROOT_PASSWORD=root
+      - MYSQL_DATABASE=dvwa
+      - MYSQL_USER=dvwa
+      - MYSQL_PASSWORD=p@ssw0rd
+    restart: unless-stopped
+
+  # OWASP Juice Shop
+  juice-shop:
+    image: bkimminich/juice-shop:latest
+    container_name: benchmark-juice-shop
+    ports:
+      - "8081:3000"
+    networks:
+      - benchmark-net
+    restart: unless-stopped
+    labels:
+      - "benchmark.target=true"
+      - "benchmark.category=api_security"
+
+  # OWASP WebGoat
+  webgoat:
+    image: webgoat/webgoat:latest
+    container_name: benchmark-webgoat
+    ports:
+      - "8082:8080"
+      - "9090:9090"
+    networks:
+      - benchmark-net
+    environment:
+      - WEBGOAT_HOST=webgoat
+      - WEBGOAT_PORT=8080
+    restart: unless-stopped
+    labels:
+      - "benchmark.target=true"
+      - "benchmark.category=owasp_top10"
+
+networks:
+  benchmark-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+    labels:
+      - "benchmark.network=isolated"
+
+# Usage:
+# docker-compose -f docker/benchmark-targets.yml up -d
+#
+# Access targets:
+# - DVWA: http://localhost:8080 (admin/password)
+# - Juice Shop: http://localhost:8081
+# - WebGoat: http://localhost:8082/WebGoat
+#
+# Stop targets:
+# docker-compose -f docker/benchmark-targets.yml down

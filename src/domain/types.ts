@@ -11,11 +11,12 @@ export type AccessReviewStatus = 'draft' | 'evidence_ready' | 'differential_obse
 export type AccessReviewSide = 'baseline' | 'comparison';
 export type SarifImportStatus = 'imported';
 export type ScannerResultImportStatus = 'imported';
-export type ScannerResultEngine = 'nuclei' | 'semgrep' | 'httpx' | 'ffuf' | 'sqlmap' | 'nmap' | 'tlsx' | 'generic';
+export type ScannerResultEngine = 'nuclei' | 'semgrep' | 'httpx' | 'ffuf' | 'sqlmap' | 'nmap' | 'tlsx' | 'llm_fingerprint' | 'prompt_injection' | 'rag_exposure' | 'mcp_audit' | 'generic';
 export type CaptureImportStatus = 'imported';
 export type AndroidManifestImportStatus = 'imported';
 export type ProgramScopeImportStatus = 'imported';
 export type RunExportStatus = 'generated';
+export type CheckpointTrigger = 'manual' | 'auto_interval' | 'pre_shutdown' | 'pre_timeout';
 export type CloudIamImportStatus = 'imported';
 export type CloudProvider = 'aws' | 'generic';
 export type IdentityGraphImportStatus = 'imported';
@@ -36,6 +37,7 @@ export type Severity = 'critical' | 'high' | 'medium' | 'low' | 'info';
 export type Confidence = 'confirmed' | 'likely' | 'needs_dynamic_confirmation';
 export type ValidationState = 'candidate' | 'confirmed' | 'rejected';
 export type WorkerType = 'mock' | 'claude' | 'codex' | 'gemini' | 'kimi';
+export type WorkerRole = 'recon' | 'exploit' | 'auth' | 'api' | 'web' | 'mobile' | 'cloud' | 'ai_security' | 'general' | 'generalist' | 'scout' | 'credential';
 export type DomainSkillCategory =
   | 'web'
   | 'api'
@@ -168,6 +170,7 @@ export interface ScopePolicy {
 export interface WorkerConfig {
   name: string;
   type: WorkerType;
+  role?: WorkerRole;
   maxRunning: number;
   priority: number;
   command?: string;
@@ -318,6 +321,9 @@ export interface BrowserSnapshot {
   title?: string;
   screenshotEvidenceId?: string;
   textEvidenceId?: string;
+  harEvidenceId?: string;
+  traceEvidenceId?: string;
+  videoEvidenceId?: string;
   evidenceIds: string[];
   screenshotBytes?: number;
   screenshotContentType?: string;
@@ -536,6 +542,29 @@ export interface RunExport {
   createdAt: string;
 }
 
+export interface RunCheckpoint {
+  id: string;
+  runId: string;
+  checkpointId: string;
+  timestamp: string;
+  trigger: CheckpointTrigger;
+  dispatchCount: number;
+  graphSnapshot: unknown;
+  pendingIntentIds: string[];
+  completedIntentIds: string[];
+  releasedIntentIds: string[];
+  workerState: Record<string, unknown>;
+  evidenceBlobRefs: string[];
+  metadata: {
+    factCount: number;
+    intentCount: number;
+    evidenceCount: number;
+    findingCount: number;
+    compressionRatio: number;
+  };
+  createdAt: string;
+}
+
 export interface AttackSurfaceAsset {
   id: string;
   kind: AttackSurfaceAssetKind;
@@ -737,6 +766,7 @@ export interface Intent {
   fromFactIds: string[];
   hypothesis: string;
   riskLevel: RiskLevel;
+  role?: WorkerRole;
   status: IntentStatus;
   createdBy: string;
   createdAt: string;
@@ -779,6 +809,47 @@ export interface EvidenceReview {
   updatedAt: string;
 }
 
+export interface Cvss40Vector {
+  /** Attack Vector: N=Network, A=Adjacent, L=Local, P=Physical */
+  AV: 'N' | 'A' | 'L' | 'P';
+  /** Attack Complexity: L=Low, H=High */
+  AC: 'L' | 'H';
+  /** Attack Requirements: N=None, P=Present */
+  AT: 'N' | 'P';
+  /** Privileges Required: N=None, L=Low, H=High */
+  PR: 'N' | 'L' | 'H';
+  /** User Interaction: N=None, P=Passive, A=Active */
+  UI: 'N' | 'P' | 'A';
+  /** Vulnerable System Confidentiality: N=None, L=Low, H=High */
+  VC: 'N' | 'L' | 'H';
+  /** Vulnerable System Integrity: N=None, L=Low, H=High */
+  VI: 'N' | 'L' | 'H';
+  /** Vulnerable System Availability: N=None, L=Low, H=High */
+  VA: 'N' | 'L' | 'H';
+  /** Subsequent System Confidentiality: N=None, L=Low, H=High */
+  SC: 'N' | 'L' | 'H';
+  /** Subsequent System Integrity: N=None, L=Low, H=High */
+  SI: 'N' | 'L' | 'H';
+  /** Subsequent System Availability: N=None, L=Low, H=High */
+  SA: 'N' | 'L' | 'H';
+}
+
+export interface Cvss40Score {
+  vector: Cvss40Vector;
+  vectorString: string;
+  baseScore: number;
+  baseSeverity: 'NONE' | 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+}
+
+export interface AttackMapping {
+  /** MITRE ATT&CK Technique ID (e.g., T1190, T1059.001) */
+  techniqueId: string;
+  /** Technique name */
+  techniqueName: string;
+  /** Tactic (e.g., Initial Access, Execution, Privilege Escalation) */
+  tactic: string;
+}
+
 export interface Finding {
   id: string;
   runId: string;
@@ -795,6 +866,12 @@ export interface Finding {
   validatedBy?: string;
   validatedAt?: string;
   createdAt: string;
+  /** CVSS 4.0 score (optional, can be computed or operator-provided) */
+  cvss40?: Cvss40Score;
+  /** MITRE ATT&CK mappings (optional) */
+  attackMappings?: AttackMapping[];
+  /** CWE IDs (optional) */
+  cweIds?: string[];
 }
 
 export interface ToolInvocation {
@@ -936,4 +1013,7 @@ export interface ProposeFindingInput {
   reproSteps: string[];
   impact: string;
   remediation: string;
+  cvss40?: Cvss40Score;
+  attackMappings?: AttackMapping[];
+  cweIds?: string[];
 }

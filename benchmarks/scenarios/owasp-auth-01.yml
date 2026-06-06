@@ -1,0 +1,51 @@
+# OWASP Broken Authentication Benchmark Scenario
+id: owasp-auth-01
+category: owasp_top10
+title: Broken Authentication - Weak Credentials
+description: Weak credential policy allowing brute force or default credentials
+target: http://dvwa.local/login.php
+goal: Identify weak authentication controls and demonstrate unauthorized access
+
+expectedFindings:
+  - title: Weak Authentication
+    severity: high
+    mustHaveEvidence:
+      - http_exchange
+      - command_output
+
+successCriteria:
+  minFindingsConfirmed: 1
+  maxFalsePositives: 2
+  maxTimeSeconds: 600
+
+tags:
+  - auth
+  - brute-force
+  - owasp-a07
+  - weak-credentials
+
+difficulty: medium
+dockerTargetService: dvwa
+
+# Test hints for Worker
+testHints:
+  - Test for default credentials (admin/admin, admin/password)
+  - Check for account lockout mechanisms
+  - Try brute force attacks with common password lists
+  - Look for weak session management
+
+# Expected evidence characteristics
+evidenceRequirements:
+  - kind: http_exchange
+    description: HTTP requests showing successful authentication with weak credentials
+    minCount: 1
+  - kind: command_output
+    description: Output from hydra, burp intruder, or manual brute force
+    minCount: 1
+
+# Success indicators
+successIndicators:
+  - Default or weak credentials accepted
+  - No account lockout after multiple failed attempts
+  - Successful unauthorized access demonstrated
+  - Session tokens predictable or weak
