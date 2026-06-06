@@ -1,0 +1,47 @@
+{
+  "id": "api-broken-auth-01",
+  "version": "1.0.0",
+  "category": "api_security",
+  "metadata": {
+    "title": "JWT Weak Secret Key",
+    "description": "API authentication using JWT with weak or predictable secret key",
+    "difficulty": "medium",
+    "tags": ["jwt", "authentication", "api", "broken-auth"],
+    "author": "AgentRed Team",
+    "references": [
+      "https://owasp.org/API-Security/editions/2023/en/0xa2-broken-authentication/"
+    ]
+  },
+  "target": {
+    "type": "docker_compose",
+    "setup": "benchmarks/targets/juice-shop/docker-compose.yml",
+    "baseUrl": "http://localhost:3000",
+    "teardown": "docker compose -f benchmarks/targets/juice-shop/docker-compose.yml down -v",
+    "healthcheck": {
+      "url": "http://localhost:3000/",
+      "expectedStatus": 200,
+      "maxRetries": 10,
+      "retryDelayMs": 3000
+    }
+  },
+  "goal": "Identify weak JWT secret key vulnerability in API authentication. Attempt to forge tokens or brute-force the secret.",
+  "expectedFindings": [
+    {
+      "title": "JWT Weak Secret",
+      "severity": "high",
+      "mustHaveEvidence": ["http_exchange", "command_output"],
+      "optionalEvidence": []
+    }
+  ],
+  "successCriteria": {
+    "minFindingsConfirmed": 1,
+    "maxFalsePositives": 1,
+    "maxTimeSeconds": 600,
+    "requiredEvidenceQuality": "good"
+  },
+  "hints": {
+    "scope": ["http://localhost:3000/api/*", "http://localhost:3000/rest/*"],
+    "initialIntent": "Analyze JWT tokens and test for weak secrets or signature validation issues",
+    "relevantTools": ["http.request", "api.jwt_analyzer"]
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "id": "owasp-top10-basic",
+  "name": "OWASP Top 10 Basic Assessment",
+  "description": "Cover fundamental vulnerabilities from OWASP Top 10 2021",
+  "version": "1.0.0",
+  "scenarios": [
+    "owasp-sqli-login-01",
+    "owasp-xss-reflected-01"
+  ],
+  "passThreshold": 0.8,
+  "metadata": {
+    "category": "owasp_top10",
+    "estimatedDurationMinutes": 15,
+    "tags": ["owasp", "web", "basic"]
+  }
+}

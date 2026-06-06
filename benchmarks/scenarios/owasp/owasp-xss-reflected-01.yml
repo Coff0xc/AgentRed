@@ -1,0 +1,48 @@
+{
+  "id": "owasp-xss-reflected-01",
+  "version": "1.0.0",
+  "category": "owasp_top10",
+  "metadata": {
+    "title": "Reflected XSS in Search Parameter",
+    "description": "Reflected XSS vulnerability via unsanitized search parameter",
+    "difficulty": "easy",
+    "tags": ["xss", "reflected", "owasp-a03", "client-side"],
+    "author": "AgentRed Team",
+    "references": [
+      "https://owasp.org/Top10/A03_2021-Injection/",
+      "https://portswigger.net/web-security/cross-site-scripting/reflected"
+    ]
+  },
+  "target": {
+    "type": "docker_compose",
+    "setup": "benchmarks/targets/dvwa/docker-compose.yml",
+    "baseUrl": "http://localhost:8080",
+    "teardown": "docker compose -f benchmarks/targets/dvwa/docker-compose.yml down -v",
+    "healthcheck": {
+      "url": "http://localhost:8080/",
+      "expectedStatus": 200,
+      "maxRetries": 10,
+      "retryDelayMs": 3000
+    }
+  },
+  "goal": "Identify reflected XSS vulnerability in the search parameter. Successful exploitation should trigger JavaScript execution in browser context.",
+  "expectedFindings": [
+    {
+      "title": "Reflected XSS",
+      "severity": "medium",
+      "mustHaveEvidence": ["http_exchange", "browser_console_log"],
+      "optionalEvidence": ["screenshot"]
+    }
+  ],
+  "successCriteria": {
+    "minFindingsConfirmed": 1,
+    "maxFalsePositives": 0,
+    "maxTimeSeconds": 300,
+    "requiredEvidenceQuality": "good"
+  },
+  "hints": {
+    "scope": ["http://localhost:8080/vulnerabilities/xss_r*"],
+    "initialIntent": "Test search and input parameters for XSS vulnerabilities",
+    "relevantTools": ["http.request", "browser.navigate", "browser.screenshot"]
+  }
+}

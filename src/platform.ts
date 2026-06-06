@@ -4,6 +4,10 @@ import { AgentHarnessService } from './agents/agent-harness-service.js';
 import { AgentWorkbenchService } from './agents/agent-workbench-service.js';
 import { AccessReviewService } from './access/access-review-service.js';
 import { ApprovalService } from './approvals/approval-service.js';
+import { BenchmarkService } from './benchmark/benchmark-service.js';
+import { ScenarioLoader } from './benchmark/scenario-loader.js';
+import { ExecutorEngine } from './benchmark/executor-engine.js';
+import { ScorerEngine } from './benchmark/scorer-engine.js';
 import {
   BrowserSessionService,
   createPlaywrightRuntimeFromEnv,
@@ -126,7 +130,12 @@ export interface Platform {
   agentFramework: AgentFrameworkService;
   agentHarness: AgentHarnessService;
   agentWorkbench: AgentWorkbenchService;
+  benchmark: BenchmarkService;
 }
+
+// Re-export for convenience
+export { GraphServer } from './graph/graph-server.js';
+export { Dispatcher } from './dispatcher/dispatcher.js';
 
 export interface CreatePlatformOptions {
   databasePath?: string;
@@ -256,6 +265,13 @@ export function createPlatform(options: CreatePlatformOptions = {}): Platform {
     localRunnerWorkbench,
   );
   const supervisor = new RunSupervisorService(store, graph);
+  const benchmark = new BenchmarkService({
+    graphServer: graph,
+    dispatcher,
+    scenarioLoader: new ScenarioLoader(),
+    executorEngine: new ExecutorEngine(),
+    scorerEngine: new ScorerEngine(),
+  });
   return {
     store,
     events,
@@ -318,5 +334,6 @@ export function createPlatform(options: CreatePlatformOptions = {}): Platform {
     agentFramework,
     agentHarness,
     agentWorkbench,
+    benchmark,
   };
 }
