@@ -1,4 +1,6 @@
+import { createHash } from 'node:crypto';
 import type { ApprovalStatus, RiskLevel, ScopePolicy } from '../domain/types.js';
+import { scopeCache, type ScopeCacheKey } from './scope-cache.js';
 
 export interface ScopeDecision {
   action: 'allow' | 'deny' | 'approval_required';
@@ -6,6 +8,32 @@ export interface ScopeDecision {
 }
 
 export function evaluateScope(
+  runId: string,
+  policy: ScopePolicy,
+  target: string,
+  method: string,
+  riskLevel: RiskLevel,
+  approvalStatus?: ApprovalStatus,
+  r4AuthorizationToken?: string,
+): ScopeDecision {
+  const cacheKey: ScopeCacheKey = {
+    runId,
+    target,
+    method,
+    riskLevel,
+    approvalStatus,
+    r4TokenFingerprint: r4AuthorizationToken ? createR4TokenFingerprint(r4AuthorizationToken) : '',
+  };
+
+  const cached = scopeCache.get(cacheKey, policy);
+  if (cached) return cached;
+
+  const decision = evaluateScopeUncached(policy, target, method, riskLevel, approvalStatus, r4AuthorizationToken);
+  scopeCache.set(cacheKey, policy, decision);
+  return decision;
+}
+
+function evaluateScopeUncached(
   policy: ScopePolicy,
   target: string,
   method: string,
@@ -94,4 +122,8 @@ function ipv4ToInt(ip: string): number {
     .split('.')
     .map(Number)
     .reduce((acc, octet) => ((acc << 8) + octet) >>> 0, 0);
+}
+
+function createR4TokenFingerprint(token: string): string {
+  return createHash('sha256').update(token).digest('hex');
 }

@@ -777,6 +777,7 @@ export interface Intent {
   releasedAt?: string;
   releaseReason?: string;
   concludedAt?: string;
+  version: number;
 }
 
 export interface Hint {
@@ -903,6 +904,7 @@ export interface ApprovalRequest {
   status: ApprovalStatus;
   createdAt: string;
   decidedAt?: string;
+  expiresAt?: string;
 }
 
 export interface ProxySession {

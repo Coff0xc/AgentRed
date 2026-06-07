@@ -4,6 +4,7 @@ import { newId, nowIso } from '../domain/ids.js';
 import type { Evidence, EvidenceKind, RedactionState } from '../domain/types.js';
 import type { RunEventService } from '../events/run-event-service.js';
 import type { EvidenceBlob, PlatformStore } from '../storage/store.js';
+import { getIndexedStoreMutator } from '../storage/indexed-store.js';
 
 export class EvidenceEngine {
   constructor(
@@ -36,6 +37,7 @@ export class EvidenceEngine {
       createdAt: nowIso(),
     };
     this.store.state.evidence[evidence.id] = evidence;
+    getIndexedStoreMutator(this.store)?.onEvidenceAdded(evidence.id, evidence);
     this.store.state.evidenceBlobs[localUri] = {
       encoding: Buffer.isBuffer(input.content) ? 'base64' : 'utf8',
       content: Buffer.isBuffer(input.content) ? content.toString('base64') : content.toString('utf8'),

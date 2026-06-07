@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import type { CheckpointTrigger, RestoreStrategy } from '../checkpoint/checkpoint-service.js';
 import { ProgressWebSocketServer } from '../events/progress-websocket-server.js';
 
 import type { Platform } from '../platform.js';
@@ -135,6 +136,9 @@ async function route(
         'GET /runs/{id}/graph',
         'GET /runs/{id}/events',
         'GET /runs/{id}/progress',
+        'POST /runs/{id}/checkpoint',
+        'GET /runs/{id}/checkpoints',
+        'POST /runs/{id}/checkpoint/restore',
         'GET /runs/{id}/mission-control',
         'GET /runs/{id}/supervisor',
         'POST /runs/{id}/supervisor/tick',
@@ -191,6 +195,9 @@ async function route(
         'GET /scanner-template-policies',
         'GET /toolbox-policy',
         'GET /toolbox-doctor',
+        'GET /mcp/bundles',
+        'POST /mcp/scan',
+        'POST /benchmark/execute',
         'GET /runs/{id}/runtime-activation-plan',
         'GET /toolbox-bundles',
         'POST /toolbox-bundles',
@@ -384,6 +391,28 @@ async function route(
     return;
   }
 
+  if (method === 'GET' && url.pathname === '/mcp/bundles') {
+    sendJson(response, 200, platform.mcpBundles.listBundles().map(serializeMcpBundle));
+    return;
+  }
+
+  if (method === 'POST' && url.pathname === '/mcp/scan') {
+    const input = validateMcpScanRequest(await readJson(request));
+    sendJson(response, 200, platform.mcpSecurity.checkServerExecutable(input.serverPath));
+    return;
+  }
+
+  if (method === 'POST' && url.pathname === '/benchmark/execute') {
+    const input = validateBenchmarkExecuteRequest(await readJson(request));
+    assertRunExists(platform, input.runId);
+    try {
+      sendJson(response, 200, await platform.benchmarkSuite.startBenchmarkRun(input.scenarioId, input.runId));
+    } catch (error) {
+      throw new HttpError(404, error instanceof Error ? error.message : 'Benchmark execution failed');
+    }
+    return;
+  }
+
   if (method === 'GET' && pathParts[0] === 'runs' && pathParts[2] === 'runtime-activation-plan') {
     assertRunExists(platform, pathParts[1]);
     sendJson(response, 200, await platform.runtimeActivation.get(pathParts[1]));
@@ -521,6 +550,34 @@ async function route(
 
   if (method === 'GET' && pathParts[0] === 'runs' && pathParts[2] === 'progress') {
     sendJson(response, 200, platform.events.progress(pathParts[1]));
+    return;
+  }
+
+  if (method === 'POST' && pathParts[0] === 'runs' && pathParts[2] === 'checkpoint') {
+    assertRunExists(platform, pathParts[1]);
+    const input = validateCheckpointRequest(await readJson(request));
+    try {
+      sendJson(response, 201, await platform.checkpoint.createCheckpoint(pathParts[1], input.trigger));
+    } catch (error) {
+      throw new HttpError(400, error instanceof Error ? error.message : 'Checkpoint creation failed');
+    }
+    return;
+  }
+
+  if (method === 'GET' && pathParts[0] === 'runs' && pathParts[2] === 'checkpoints') {
+    assertRunExists(platform, pathParts[1]);
+    sendJson(response, 200, await platform.checkpoint.listCheckpoints(pathParts[1]));
+    return;
+  }
+
+  if (method === 'POST' && pathParts[0] === 'runs' && pathParts[2] === 'checkpoint' && pathParts[3] === 'restore') {
+    assertRunExists(platform, pathParts[1]);
+    const input = validateCheckpointRestoreRequest(await readJson(request));
+    try {
+      sendJson(response, 200, await platform.checkpoint.restoreCheckpoint(input.checkpointId, input.strategy));
+    } catch (error) {
+      throw new HttpError(404, error instanceof Error ? error.message : 'Checkpoint restore failed');
+    }
     return;
   }
 
@@ -1589,7 +1646,7 @@ async function handleHttpProxyRequest(
     throw new HttpError(409, `No active proxy capture session for run: ${runId}`);
   }
   const target = new URL(rawUrl);
-  const scopeDecision = evaluateScope(run.scopePolicy, target.toString(), method, 'R1');
+  const scopeDecision = evaluateScope(runId, run.scopePolicy, target.toString(), method, 'R1');
   if (scopeDecision.action !== 'allow') {
     throw new HttpError(403, scopeDecision.reason);
   }
@@ -1768,6 +1825,13 @@ function assertRunExists(platform: Platform, runId: string): void {
   if (!platform.store.state.runs[runId]) {
     throw new HttpError(404, `Run not found: ${runId}`);
   }
+}
+
+function serializeMcpBundle(bundle: ReturnType<Platform['mcpBundles']['listBundles']>[number]) {
+  return {
+    ...bundle,
+    toolPolicies: Array.from(bundle.toolPolicies.values()),
+  };
 }
 
 function getRunReview(platform: Platform, runId: string) {
@@ -1983,7 +2047,7 @@ function captureHttpExchange(platform: Platform, input: HttpExchangeCaptureInput
   if (!run) {
     throw new HttpError(404, `Run not found: ${input.runId}`);
   }
-  const scopeDecision = evaluateScope(run.scopePolicy, input.request.target, input.request.method, 'R1');
+  const scopeDecision = evaluateScope(input.runId, run.scopePolicy, input.request.target, input.request.method, 'R1');
   if (scopeDecision.action !== 'allow') {
     throw new HttpError(403, scopeDecision.reason);
   }
@@ -2035,7 +2099,7 @@ function importHarCapture(platform: Platform, input: HarCaptureInput): HarImport
       skippedEntries.push({ index, reason: 'HAR entry request.url is missing' });
       return;
     }
-    const scopeDecision = evaluateScope(run.scopePolicy, target, method, 'R1');
+    const scopeDecision = evaluateScope(input.runId, run.scopePolicy, target, method, 'R1');
     if (scopeDecision.action !== 'allow') {
       skippedEntries.push({ index, target: redactUrl(target), reason: scopeDecision.reason });
       return;
@@ -2120,7 +2184,7 @@ function captureBrowserSnapshot(platform: Platform, input: BrowserSnapshotCaptur
   if (!run) {
     throw new HttpError(404, `Run not found: ${input.runId}`);
   }
-  const scopeDecision = evaluateScope(run.scopePolicy, input.target, 'GET', 'R1');
+  const scopeDecision = evaluateScope(input.runId, run.scopePolicy, input.target, 'GET', 'R1');
   if (scopeDecision.action !== 'allow') {
     throw new HttpError(403, scopeDecision.reason);
   }
@@ -2685,6 +2749,48 @@ function validateToolboxBundleStatus(input: unknown): RegisterToolboxBundleInput
     throw new HttpError(400, 'status must be available, partial, planned, or unavailable');
   }
   return input;
+}
+
+function validateCheckpointRequest(input: unknown): { trigger: CheckpointTrigger } {
+  const object = asRecord(input, 'request body');
+  return {
+    trigger: object.trigger === undefined ? 'manual' : validateCheckpointTrigger(object.trigger),
+  };
+}
+
+function validateCheckpointRestoreRequest(input: unknown): { checkpointId: string; strategy: RestoreStrategy } {
+  const object = asRecord(input, 'request body');
+  return {
+    checkpointId: requiredString(object.checkpointId, 'checkpointId'),
+    strategy: object.strategy === undefined ? 'resume' : validateRestoreStrategy(object.strategy),
+  };
+}
+
+function validateCheckpointTrigger(input: unknown): CheckpointTrigger {
+  if (input === 'manual' || input === 'auto_interval' || input === 'pre_shutdown' || input === 'pre_timeout') {
+    return input;
+  }
+  throw new HttpError(400, 'trigger must be manual, auto_interval, pre_shutdown, or pre_timeout');
+}
+
+function validateRestoreStrategy(input: unknown): RestoreStrategy {
+  if (input === 'resume' || input === 'replay' || input === 'branch') {
+    return input;
+  }
+  throw new HttpError(400, 'strategy must be resume, replay, or branch');
+}
+
+function validateMcpScanRequest(input: unknown): { serverPath: string } {
+  const object = asRecord(input, 'request body');
+  return { serverPath: requiredString(object.serverPath, 'serverPath') };
+}
+
+function validateBenchmarkExecuteRequest(input: unknown): { scenarioId: string; runId: string } {
+  const object = asRecord(input, 'request body');
+  return {
+    scenarioId: requiredString(object.scenarioId, 'scenarioId'),
+    runId: requiredString(object.runId, 'runId'),
+  };
 }
 
 function validateConnectorKind(input: unknown): RegisterConnectorInput['kind'] {

@@ -80,15 +80,16 @@ class FakeBrowserRuntime implements BrowserAutomationRuntime {
 }
 
 test('ScopePolicy allows in-scope traffic and blocks denied, out-of-scope, R3, and R4 actions', () => {
-  assert.equal(evaluateScope(policy, 'https://api.example.com/v1/users', 'GET', 'R1').action, 'allow');
-  assert.equal(evaluateScope(policy, 'https://admin.example.com', 'GET', 'R1').action, 'deny');
-  assert.equal(evaluateScope(policy, 'https://evil.test', 'GET', 'R1').action, 'deny');
-  assert.equal(evaluateScope(policy, 'https://api.example.com/v1/users', 'DELETE', 'R1').action, 'deny');
-  assert.equal(evaluateScope(policy, 'https://api.example.com/v1/users', 'POST', 'R3').action, 'approval_required');
-  assert.equal(evaluateScope(policy, 'https://api.example.com/v1/users', 'POST', 'R3', 'approved').action, 'allow');
-  assert.equal(evaluateScope(policy, 'https://api.example.com/v1/users', 'POST', 'R4', 'approved').action, 'deny');
+  assert.equal(evaluateScope('run_001', policy, 'https://api.example.com/v1/users', 'GET', 'R1').action, 'allow');
+  assert.equal(evaluateScope('run_001', policy, 'https://admin.example.com', 'GET', 'R1').action, 'deny');
+  assert.equal(evaluateScope('run_001', policy, 'https://evil.test', 'GET', 'R1').action, 'deny');
+  assert.equal(evaluateScope('run_001', policy, 'https://api.example.com/v1/users', 'DELETE', 'R1').action, 'deny');
+  assert.equal(evaluateScope('run_001', policy, 'https://api.example.com/v1/users', 'POST', 'R3').action, 'approval_required');
+  assert.equal(evaluateScope('run_001', policy, 'https://api.example.com/v1/users', 'POST', 'R3', 'approved').action, 'allow');
+  assert.equal(evaluateScope('run_001', policy, 'https://api.example.com/v1/users', 'POST', 'R4', 'approved').action, 'deny');
   assert.equal(
     evaluateScope(
+      'run_001',
       { ...policy, r4AuthorizationToken: 'break-glass' },
       'https://api.example.com/v1/users',
       'POST',
@@ -100,6 +101,7 @@ test('ScopePolicy allows in-scope traffic and blocks denied, out-of-scope, R3, a
   );
   assert.equal(
     evaluateScope(
+      'run_001',
       { ...policy, r4AuthorizationToken: 'break-glass' },
       'https://api.example.com/v1/users',
       'POST',
@@ -111,6 +113,7 @@ test('ScopePolicy allows in-scope traffic and blocks denied, out-of-scope, R3, a
   );
   assert.equal(
     evaluateScope(
+      'run_001',
       { ...policy, r4AuthorizationToken: 'break-glass' },
       'https://evil.test',
       'POST',
@@ -122,6 +125,7 @@ test('ScopePolicy allows in-scope traffic and blocks denied, out-of-scope, R3, a
   );
   assert.equal(
     evaluateScope(
+      'run_001',
       { ...policy, r4AuthorizationToken: 'break-glass' },
       'https://api.example.com/v1/users',
       'POST',
@@ -131,7 +135,7 @@ test('ScopePolicy allows in-scope traffic and blocks denied, out-of-scope, R3, a
     ).action,
     'allow',
   );
-  assert.equal(evaluateScope(policy, '10.10.0.42', 'GET', 'R1').action, 'allow');
+  assert.equal(evaluateScope('run_001', policy, '10.10.0.42', 'GET', 'R1').action, 'allow');
 });
 
 test('ToolGateway records allowed invocations, blocks scope violations, and opens approval requests for R3', async () => {
@@ -4715,7 +4719,7 @@ test('ApprovalService.isExpired returns true for expired approvals', async () =>
   assert.equal(platform.approvals.isExpired(approved), true);
 });
 
-test('ToolGateway blocks expired approvals and returns appropriate error', async () => {
+test('ToolGateway treats expired approvals as requiring fresh approval', async () => {
   const target = await startTargetServer();
   const approvalTtlMs = 100; // 100ms for fast test
   const platform = createPlatform({ approvalTtlMs });
@@ -4760,7 +4764,9 @@ test('ToolGateway blocks expired approvals and returns appropriate error', async
       approvalId: approvalRequest.approvalId,
     });
 
-    assert.equal(result.status, 'blocked');
+    assert.equal(result.status, 'approval_required');
+    assert.ok(result.approvalId);
+    assert.notEqual(result.approvalId, approvalRequest.approvalId);
     assert.ok(result.reason.includes('expired'));
     assert.ok(result.reason.includes(approvalRequest.approvalId));
   } finally {
@@ -4876,8 +4882,6 @@ test('ToolGateway allows approved non-expired approvals', async () => {
 });
 
 test('Environment variable PLATFORM_APPROVAL_TTL_MINUTES configures TTL', () => {
-  const { resolveApiStartupConfig } = await import('../src/api/startup-config.js');
-
   // Test default (15 minutes = 900000ms)
   const defaultConfig = resolveApiStartupConfig({ PLATFORM_API_TOKEN: 'test-token' });
   assert.equal(defaultConfig.approvalTtlMs, 15 * 60 * 1000);

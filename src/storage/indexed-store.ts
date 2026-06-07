@@ -23,6 +23,9 @@ import type {
   RunEvent,
 } from '../domain/types.js';
 import type { PlatformState } from './store.js';
+import type { PlatformStore } from './store.js';
+
+const runIdIndexMutator = Symbol.for('agent-red.runIdIndexMutator');
 
 /**
  * Index maps for O(1) runId lookups.
@@ -347,4 +350,12 @@ export class IndexedStoreMutator {
   onRunEventAdded(id: string, event: RunEvent): void {
     addToIndex(this.indices.runEvents, event.runId, id);
   }
+}
+
+export function attachIndexedStoreMutator(store: PlatformStore, mutator: IndexedStoreMutator): void {
+  (store as unknown as Record<symbol, IndexedStoreMutator>)[runIdIndexMutator] = mutator;
+}
+
+export function getIndexedStoreMutator(store: PlatformStore): IndexedStoreMutator | undefined {
+  return (store as unknown as Record<symbol, IndexedStoreMutator>)[runIdIndexMutator];
 }

@@ -29,6 +29,7 @@ import type { ObservabilityService } from '../observability/observability-servic
 import type { McpExecutionService } from '../connectors/mcp-execution-service.js';
 import { redactArgs, redactHeaders, redactText, redactUrl } from '../security/redaction.js';
 import { evaluateScope } from '../scope/policy.js';
+import { getIndexedStoreMutator } from '../storage/indexed-store.js';
 import type { PlatformStore } from '../storage/store.js';
 import {
   findScannerTemplate,
@@ -368,11 +369,33 @@ export class ToolGateway {
       });
     }
     const approvalResolution = this.resolveApprovalStatus(input);
-    if (!approvalResolution.valid) {
+    if (approvalResolution.valid === false) {
       const invocation = this.recordInvocation(input, 'blocked', approvalResolution.reason, input.approvalId);
       return this.finishTool(input, { status: 'blocked', invocationId: invocation.id, reason: approvalResolution.reason }, startedMs, {
         reason: approvalResolution.reason,
       });
+    }
+    if (approvalResolution.expired) {
+      const request = this.approvals.request({
+        runId: input.runId,
+        tool: input.tool,
+        target: redactUrl(input.target),
+        riskLevel: input.riskLevel,
+        reason: `Previous approval ${input.approvalId} expired; operator approval is required again`,
+      });
+      const reason = `Approval ${input.approvalId} has expired; new approval ${request.id} is required`;
+      const invocation = this.recordInvocation(input, 'approval_required', reason, request.id);
+      return this.finishTool(
+        input,
+        {
+          status: 'approval_required',
+          invocationId: invocation.id,
+          approvalId: request.id,
+          reason,
+        },
+        startedMs,
+        { approvalId: request.id, reason },
+      );
     }
     const scopeDecision = evaluateScope(
       input.runId,
@@ -614,6 +637,7 @@ export class ToolGateway {
       endedAt: timestamp,
     };
     this.store.state.toolInvocations[invocation.id] = invocation;
+    getIndexedStoreMutator(this.store)?.onToolInvocationAdded(invocation.id, invocation);
     if (status === 'allowed' || status === 'blocked') {
       this.events?.record({
         runId: input.runId,
@@ -647,7 +671,7 @@ export class ToolGateway {
   }
 
   private resolveApprovalStatus(input: ToolInvokeInput):
-    | { valid: true; status?: ApprovalStatus }
+    | { valid: true; status?: ApprovalStatus; expired?: boolean }
     | { valid: false; reason: string } {
     if (!input.approvalId) {
       return { valid: true };
@@ -673,7 +697,7 @@ export class ToolGateway {
 
       // Check if approval is expired
       if (this.approvals.isExpired(approval)) {
-        return { valid: false, reason: `Approval ${input.approvalId} has expired` };
+        return { valid: true, status: 'pending', expired: true };
       }
 
       return { valid: true, status: approval.status };

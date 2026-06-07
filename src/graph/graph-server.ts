@@ -11,7 +11,13 @@ import type {
 } from '../domain/types.js';
 import type { RunEventService } from '../events/run-event-service.js';
 import type { PlatformStore } from '../storage/store.js';
-import { buildIndices, IndexedStoreQuery, IndexedStoreMutator, type RunIdIndices } from '../storage/indexed-store.js';
+import {
+  attachIndexedStoreMutator,
+  buildIndices,
+  IndexedStoreQuery,
+  IndexedStoreMutator,
+  type RunIdIndices,
+} from '../storage/indexed-store.js';
 
 export class GraphServer {
   private indices: RunIdIndices;
@@ -26,6 +32,7 @@ export class GraphServer {
     this.indices = buildIndices(store.state);
     this.query = new IndexedStoreQuery(store.state, this.indices);
     this.mutator = new IndexedStoreMutator(this.indices);
+    attachIndexedStoreMutator(store, this.mutator);
   }
 
   createRun(input: CreateRunInput): Run {
@@ -75,12 +82,19 @@ export class GraphServer {
   getGraph(runId: string): GraphSnapshot {
     const run = this.getRun(runId);
     return {
-      run,
-      facts: this.query.getFactsByRunId(runId),
-      intents: this.query.getIntentsByRunId(runId),
-      hints: this.query.getHintsByRunId(runId),
-      evidence: this.query.getEvidenceByRunId(runId),
-      findings: this.query.getFindingsByRunId(runId),
+      run: { ...run },
+      facts: this.query.getFactsByRunId(runId).map((fact) => ({ ...fact, evidenceIds: [...fact.evidenceIds] })),
+      intents: this.query.getIntentsByRunId(runId).map((intent) => ({ ...intent, fromFactIds: [...intent.fromFactIds] })),
+      hints: this.query.getHintsByRunId(runId).map((hint) => ({ ...hint })),
+      evidence: this.query.getEvidenceByRunId(runId).map((evidence) => ({ ...evidence })),
+      findings: this.query.getFindingsByRunId(runId).map((finding) => ({
+        ...finding,
+        affectedAssets: [...finding.affectedAssets],
+        evidenceIds: [...finding.evidenceIds],
+        reproSteps: [...finding.reproSteps],
+        attackMappings: finding.attackMappings?.map((mapping) => ({ ...mapping })),
+        cweIds: finding.cweIds ? [...finding.cweIds] : undefined,
+      })),
     };
   }
 
@@ -156,6 +170,7 @@ export class GraphServer {
     if (!intent) {
       throw new Error(`Intent not found: ${intentId}`);
     }
+    intent.version += 1;
     intent.status = 'concluded';
     intent.concludedAt = nowIso();
     this.events?.record({
@@ -179,11 +194,11 @@ export class GraphServer {
 
   claimIntent(intentId: string, workerName: string, leaseMs: number, expectedVersion?: number): Intent {
     const intent = this.getIntent(intentId);
-    if (intent.status !== 'open' && intent.status !== 'released') {
-      throw new Error(`Intent ${intentId} is not claimable`);
-    }
     if (expectedVersion !== undefined && intent.version !== expectedVersion) {
       throw new Error(`Intent ${intentId} version conflict: expected ${expectedVersion}, found ${intent.version}`);
+    }
+    if (intent.status !== 'open' && intent.status !== 'released') {
+      throw new Error(`Intent ${intentId} is not claimable`);
     }
     const now = Date.now();
     intent.status = 'claimed';
@@ -236,6 +251,7 @@ export class GraphServer {
     if (intent.status === 'concluded') {
       return intent;
     }
+    intent.version += 1;
     intent.status = 'released';
     intent.releaseReason = reason;
     intent.releasedAt = nowIso();
@@ -262,6 +278,7 @@ export class GraphServer {
       if (Date.parse(intent.leaseExpiresAt) >= now.getTime()) {
         continue;
       }
+      intent.version += 1;
       intent.status = 'open';
       intent.releaseReason = `Lease expired for ${intent.claimedBy ?? 'unknown worker'}`;
       intent.releasedAt = now.toISOString();

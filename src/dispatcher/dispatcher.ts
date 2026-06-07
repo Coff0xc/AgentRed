@@ -570,8 +570,9 @@ export class Dispatcher {
           };
         }
 
+        const activeIntent = this.graph.heartbeatIntent(intentId, task.intent.leaseId ?? '', this.intentLeaseMs);
         const latestGraph = this.graph.getGraph(runId);
-        const latestIntent = latestGraph.intents.find((item) => item.id === intentId) ?? task.intent;
+        const latestIntent = latestGraph.intents.find((item) => item.id === intentId) ?? activeIntent;
         const continueTask = this.withWorkerContext(runId, {
           type: 'explore',
           graph: latestGraph,

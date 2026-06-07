@@ -14,7 +14,7 @@ class InMemoryStore implements PlatformStore {
   commit(): void {}
 }
 
-test('ApprovalService creates approval with default TTL (1 hour)', () => {
+test('ApprovalService sets default TTL when approval is approved', () => {
   const store = new InMemoryStore();
   const service = new ApprovalService(store);
 
@@ -26,16 +26,17 @@ test('ApprovalService creates approval with default TTL (1 hour)', () => {
     reason: 'Test approval',
   });
 
-  assert.ok(approval.expiresAt);
-  const expiryTime = new Date(approval.expiresAt).getTime();
+  assert.equal(approval.expiresAt, undefined);
+  const approved = service.decide(approval.id, 'approved');
+  assert.ok(approved.expiresAt);
+  const expiryTime = new Date(approved.expiresAt).getTime();
   const now = Date.now();
-  const oneHour = 60 * 60 * 1000;
+  const defaultTtl = 15 * 60 * 1000;
 
-  // Should expire in approximately 1 hour (within 1 second tolerance)
-  assert.ok(Math.abs(expiryTime - (now + oneHour)) < 1000);
+  assert.ok(Math.abs(expiryTime - (now + defaultTtl)) < 1000);
 });
 
-test('ApprovalService creates approval with custom TTL', () => {
+test('ApprovalService sets per-request TTL when approval is approved', () => {
   const store = new InMemoryStore();
   const service = new ApprovalService(store);
 
@@ -49,8 +50,10 @@ test('ApprovalService creates approval with custom TTL', () => {
     ttlMs: customTtl,
   });
 
-  assert.ok(approval.expiresAt);
-  const expiryTime = new Date(approval.expiresAt).getTime();
+  assert.equal(approval.expiresAt, undefined);
+  const approved = service.decide(approval.id, 'approved');
+  assert.ok(approved.expiresAt);
+  const expiryTime = new Date(approved.expiresAt).getTime();
   const now = Date.now();
 
   // Should expire in approximately 30 minutes
@@ -70,8 +73,10 @@ test('ApprovalService custom default TTL via constructor', () => {
     reason: 'Test approval',
   });
 
-  assert.ok(approval.expiresAt);
-  const expiryTime = new Date(approval.expiresAt).getTime();
+  assert.equal(approval.expiresAt, undefined);
+  const approved = service.decide(approval.id, 'approved');
+  assert.ok(approved.expiresAt);
+  const expiryTime = new Date(approved.expiresAt).getTime();
   const now = Date.now();
 
   // Should use custom default (2 hours)
@@ -106,8 +111,9 @@ test('ApprovalService.isExpired returns true for expired approval', () => {
     reason: 'Test approval',
     ttlMs: -1000, // Already expired (1 second ago)
   });
+  const approved = service.decide(approval.id, 'approved');
 
-  assert.equal(service.isExpired(approval), true);
+  assert.equal(service.isExpired(approved), true);
 });
 
 test('ApprovalService.isExpired returns false for legacy approval without expiresAt', () => {
@@ -166,8 +172,8 @@ test('ApprovalService.getEffectiveStatus returns actual status for non-expired a
   service.decide(approval.id, 'approved');
   assert.equal(service.getEffectiveStatus(approval), 'approved');
 
-  service.decide(approval.id, 'denied');
-  assert.equal(service.getEffectiveStatus(approval), 'denied');
+  service.decide(approval.id, 'rejected');
+  assert.equal(service.getEffectiveStatus(approval), 'rejected');
 });
 
 test('ApprovalService.getEffectiveStatus handles legacy approval correctly', () => {

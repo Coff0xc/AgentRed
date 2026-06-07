@@ -1,6 +1,7 @@
 import { newId, nowIso } from '../domain/ids.js';
 import type { RunEvent, RunEventLevel, RunEventType, RunPhase, RunProgress } from '../domain/types.js';
 import { redactText } from '../security/redaction.js';
+import { getIndexedStoreMutator } from '../storage/indexed-store.js';
 import type { PlatformStore } from '../storage/store.js';
 import type { ProgressWebSocketServer } from './progress-websocket-server.js';
 
@@ -32,6 +33,7 @@ export class RunEventService {
       createdAt: nowIso(),
     };
     this.store.state.runEvents[event.id] = event;
+    getIndexedStoreMutator(this.store)?.onRunEventAdded(event.id, event);
     this.store.commit();
 
     // Broadcast to WebSocket subscribers (non-blocking)

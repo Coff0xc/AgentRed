@@ -6,6 +6,7 @@ import { AccessReviewService } from './access/access-review-service.js';
 import { ApprovalService } from './approvals/approval-service.js';
 import { BenchmarkSuiteService } from './benchmark/benchmark-suite.js';
 import { BenchmarkScorerService } from './benchmark/benchmark-scorer.js';
+import { CheckpointService } from './checkpoint/checkpoint-service.js';
 import {
   BrowserSessionService,
   createPlaywrightRuntimeFromEnv,
@@ -29,6 +30,10 @@ import { FindingService } from './findings/finding-service.js';
 import { RunFlowService } from './flow/run-flow-service.js';
 import { GraphServer } from './graph/graph-server.js';
 import { IdentityGraphImportService } from './identity/identity-graph-import-service.js';
+import { KnowledgeGraphService } from './knowledge-graph/knowledge-graph-service.js';
+import type { Neo4jConfig } from './knowledge-graph/neo4j-adapter.js';
+import { McpBundleManager } from './mcp/mcp-bundle-manager.js';
+import { McpPoisonDetector } from './mcp/mcp-poison-detector.js';
 import { AndroidManifestImportService } from './mobile/android-manifest-import-service.js';
 import { AssessmentMissionControlService } from './mission/assessment-mission-control-service.js';
 import { OastService } from './oast/oast-service.js';
@@ -52,6 +57,7 @@ import { RuntimeOperationsWorkbenchService } from './runtime/runtime-operations-
 import { SarifImportService } from './sast/sarif-import-service.js';
 import { ScannerResultImportService } from './scanners/scanner-result-import-service.js';
 import { WorkerSelectionPolicyService } from './scheduling/worker-selection-policy-service.js';
+import { DockerRuntime } from './sandbox/docker-runtime.js';
 import { DomainSkillReadinessService } from './skills/domain-skill-readiness-service.js';
 import { DomainSkillService } from './skills/domain-skill-service.js';
 import { InMemoryPlatformStore, SqlitePlatformStore, type PlatformStore } from './storage/store.js';
@@ -69,11 +75,16 @@ import { WorkerRuntimeService } from './workers/worker-runtime-service.js';
 export interface Platform {
   store: PlatformStore;
   events: RunEventService;
+  checkpoint: CheckpointService;
   executionNode: LocalExecutionNodeService;
   desktopReadiness: DesktopRunnerReadinessService;
   localRunnerWorkbench: LocalRunnerWorkbenchService;
   graph: GraphServer;
   approvals: ApprovalService;
+  mcpBundles: McpBundleManager;
+  mcpSecurity: McpPoisonDetector;
+  sandbox: DockerRuntime;
+  knowledgeGraph: KnowledgeGraphService | null;
   browserSessions: BrowserSessionService;
   proxySessions: ProxySessionService;
   oast: OastService;
@@ -135,13 +146,20 @@ export interface Platform {
 export interface CreatePlatformOptions {
   databasePath?: string;
   browserRuntime?: BrowserAutomationRuntime;
+  approvalTtlMs?: number;
+  neo4jConfig?: Neo4jConfig;
 }
 
 export function createPlatform(options: CreatePlatformOptions = {}): Platform {
   const store = options.databasePath ? new SqlitePlatformStore(options.databasePath) : new InMemoryPlatformStore();
   const events = new RunEventService(store, undefined); // wsServer will be set after API server starts
   const graph = new GraphServer(store, events);
-  const approvals = new ApprovalService(store, events);
+  const checkpoint = new CheckpointService(graph, store, { events });
+  const approvals = new ApprovalService(store, events, { approvalTtlMs: options.approvalTtlMs });
+  const mcpBundles = new McpBundleManager();
+  const mcpSecurity = new McpPoisonDetector();
+  const sandbox = new DockerRuntime();
+  const knowledgeGraph = options.neo4jConfig ? new KnowledgeGraphService(store, options.neo4jConfig) : null;
   const observability = new ObservabilityService(store);
   const capabilityRadar = new RunCapabilityRadarService(store);
   const workerLeaderboard = new WorkerLeaderboardService(store);
@@ -207,6 +225,7 @@ export function createPlatform(options: CreatePlatformOptions = {}): Platform {
     toolbox,
     connectors,
     workerSelection,
+    checkpoints: checkpoint,
   });
   const strategy = new StrategyService(store, graph, skills, pocs);
   const enterprisePentestScorer = new EnterprisePentestScorerService(store, strategy);
@@ -264,11 +283,16 @@ export function createPlatform(options: CreatePlatformOptions = {}): Platform {
   return {
     store,
     events,
+    checkpoint,
     executionNode,
     desktopReadiness,
     localRunnerWorkbench,
     graph,
     approvals,
+    mcpBundles,
+    mcpSecurity,
+    sandbox,
+    knowledgeGraph,
     browserSessions,
     proxySessions,
     oast,

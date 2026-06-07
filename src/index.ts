@@ -4,7 +4,7 @@ import { createPlatform } from './platform.js';
 
 const config = resolveApiStartupConfig(process.env);
 
-const platform = createPlatform({ databasePath: config.databasePath });
+const platform = createPlatform({ databasePath: config.databasePath, approvalTtlMs: config.approvalTtlMs });
 const api = await startApiServer(platform, {
   port: config.port,
   authToken: config.authToken,

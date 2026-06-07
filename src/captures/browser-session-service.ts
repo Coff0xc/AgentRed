@@ -479,7 +479,7 @@ export class BrowserSessionService {
 
   private assertInScope(runId: string, target: string, method: string, riskLevel: RiskLevel): void {
     const run = this.assertRun(runId);
-    const decision = evaluateScope(run.scopePolicy, target, method, riskLevel);
+    const decision = evaluateScope(runId, run.scopePolicy, target, method, riskLevel);
     if (decision.action !== 'allow') {
       throw new Error(decision.reason);
     }
@@ -488,7 +488,7 @@ export class BrowserSessionService {
   private isRequestInScope(runId: string, target: string, method: string, riskLevel: RiskLevel): boolean {
     try {
       const run = this.assertRun(runId);
-      return evaluateScope(run.scopePolicy, target, method, riskLevel).action === 'allow';
+      return evaluateScope(runId, run.scopePolicy, target, method, riskLevel).action === 'allow';
     } catch {
       return false;
     }

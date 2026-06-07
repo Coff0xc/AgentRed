@@ -12,6 +12,7 @@ import type {
   TraceSpanStatus,
 } from '../domain/types.js';
 import { redactText, redactUrl } from '../security/redaction.js';
+import { getIndexedStoreMutator } from '../storage/indexed-store.js';
 import type { PlatformStore } from '../storage/store.js';
 
 type SpanAttributeValue = string | number | boolean | undefined;
@@ -50,6 +51,7 @@ export class ObservabilityService {
       attributes: sanitizeAttributes(input.attributes ?? {}),
     };
     this.store.state.traceSpans[span.id] = span;
+    getIndexedStoreMutator(this.store)?.onTraceSpanAdded(span.id, span);
     this.store.commit();
     return span;
   }
@@ -99,6 +101,7 @@ export class ObservabilityService {
       createdAt: nowIso(),
     };
     this.store.state.costLedger[entry.id] = entry;
+    getIndexedStoreMutator(this.store)?.onCostLedgerAdded(entry.id, entry);
     this.store.commit();
     return entry;
   }

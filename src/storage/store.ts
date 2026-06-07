@@ -144,12 +144,23 @@ export function emptyState(): PlatformState {
 }
 
 function normalizeState(state: Partial<PlatformState>): PlatformState {
+  // Migrate intents to add version field if missing
+  const normalizedIntents: Record<string, Intent> = {};
+  if (state.intents) {
+    for (const [id, intent] of Object.entries(state.intents)) {
+      normalizedIntents[id] = {
+        ...intent,
+        version: intent.version ?? 0,
+      };
+    }
+  }
+
   return {
     ...emptyState(),
     ...state,
     runs: state.runs ?? {},
     facts: state.facts ?? {},
-    intents: state.intents ?? {},
+    intents: normalizedIntents,
     hints: state.hints ?? {},
     evidence: state.evidence ?? {},
     evidenceBlobs: state.evidenceBlobs ?? {},

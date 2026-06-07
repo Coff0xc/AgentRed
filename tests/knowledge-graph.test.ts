@@ -212,6 +212,7 @@ describe('KnowledgeGraphService', () => {
       riskLevel: 'R1',
       createdBy: 'test',
       createdAt: nowIso(),
+      version: 0,
     };
 
     store.state.evidence[evidenceId] = {

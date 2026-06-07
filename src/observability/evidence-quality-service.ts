@@ -279,7 +279,7 @@ export class EvidenceQualityService {
       };
     }
     const run = this.store.state.runs[evidence.runId];
-    const scopeDecision = evaluateScope(run.scopePolicy, target, method, 'R1');
+    const scopeDecision = evaluateScope(evidence.runId, run.scopePolicy, target, method, 'R1');
     if (scopeDecision.action !== 'allow') {
       return {
         status: 'out_of_scope',

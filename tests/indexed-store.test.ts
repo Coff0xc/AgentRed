@@ -57,6 +57,7 @@ test('buildIndices indexes existing state by runId', () => {
     runId: 'run1',
     statement: 'Test fact',
     evidenceIds: [],
+    confidence: 'confirmed',
     createdBy: 'test',
     createdAt: '2026-06-07T00:00:00Z',
   } as Fact;

@@ -2,6 +2,7 @@ import { newId, nowIso } from '../domain/ids.js';
 import type { Finding, ProposeFindingInput, ValidationState } from '../domain/types.js';
 import type { RunEventService } from '../events/run-event-service.js';
 import type { PlatformStore } from '../storage/store.js';
+import { getIndexedStoreMutator } from '../storage/indexed-store.js';
 
 export interface FindingValidationInput {
   validationState: ValidationState;
@@ -46,6 +47,7 @@ export class FindingService {
       cweIds: input.cweIds,
     };
     this.store.state.findings[finding.id] = finding;
+    getIndexedStoreMutator(this.store)?.onFindingAdded(finding.id, finding);
     this.events?.record({
       runId: input.runId,
       type: 'finding.proposed',

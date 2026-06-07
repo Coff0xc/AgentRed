@@ -1,21 +1,22 @@
 import { newId, nowIso } from '../domain/ids.js';
 import type { ApprovalRequest, ApprovalStatus, RiskLevel } from '../domain/types.js';
 import type { RunEventService } from '../events/run-event-service.js';
+import { getIndexedStoreMutator } from '../storage/indexed-store.js';
 import type { PlatformStore } from '../storage/store.js';
 
 export class ApprovalService {
   private readonly defaultTtlMs: number;
+  private readonly requestTtls = new Map<string, number>();
 
   constructor(
     private readonly store: PlatformStore,
     private readonly events?: RunEventService,
     options: { approvalTtlMs?: number } = {},
   ) {
-    this.defaultTtlMs = options.approvalTtlMs ?? 60 * 60 * 1000; // Default: 1 hour
+    this.defaultTtlMs = options.approvalTtlMs ?? 15 * 60 * 1000;
   }
 
   request(input: { runId: string; tool: string; target: string; riskLevel: RiskLevel; reason: string; ttlMs?: number }): ApprovalRequest {
-    const ttl = input.ttlMs ?? this.defaultTtlMs;
     const approval: ApprovalRequest = {
       id: newId('approval'),
       runId: input.runId,
@@ -25,9 +26,12 @@ export class ApprovalService {
       reason: input.reason,
       status: 'pending',
       createdAt: nowIso(),
-      expiresAt: new Date(Date.now() + ttl).toISOString(), // Add expiration
     };
     this.store.state.approvals[approval.id] = approval;
+    getIndexedStoreMutator(this.store)?.onApprovalAdded(approval.id, approval);
+    if (input.ttlMs !== undefined) {
+      this.requestTtls.set(approval.id, input.ttlMs);
+    }
     this.events?.record({
       runId: input.runId,
       type: 'approval.requested',
@@ -43,6 +47,13 @@ export class ApprovalService {
     const approval = this.get(id);
     approval.status = status;
     approval.decidedAt = nowIso();
+    if (status === 'approved') {
+      const ttl = this.requestTtls.get(id) ?? this.defaultTtlMs;
+      approval.expiresAt = new Date(Date.now() + ttl).toISOString();
+    } else {
+      delete approval.expiresAt;
+    }
+    this.requestTtls.delete(id);
     this.events?.record({
       runId: approval.runId,
       type: 'approval.decided',
@@ -67,6 +78,9 @@ export class ApprovalService {
    * Legacy approvals without expiresAt are considered non-expired.
    */
   isExpired(approval: ApprovalRequest): boolean {
+    if (approval.status !== 'approved') {
+      return false;
+    }
     if (!approval.expiresAt) {
       return false; // Legacy approval without expiration
     }
@@ -75,10 +89,10 @@ export class ApprovalService {
 
   /**
    * Get the effective status of an approval, considering expiration.
-   * Expired approved/denied approvals are treated as pending.
+   * Expired approved approvals are treated as pending.
    */
   getEffectiveStatus(approval: ApprovalRequest): ApprovalStatus {
-    if (this.isExpired(approval) && approval.status !== 'pending') {
+    if (this.isExpired(approval)) {
       return 'pending'; // Expired approvals revert to pending
     }
     return approval.status;
