@@ -11,12 +11,22 @@ import type {
 } from '../domain/types.js';
 import type { RunEventService } from '../events/run-event-service.js';
 import type { PlatformStore } from '../storage/store.js';
+import { buildIndices, IndexedStoreQuery, IndexedStoreMutator, type RunIdIndices } from '../storage/indexed-store.js';
 
 export class GraphServer {
+  private indices: RunIdIndices;
+  private query: IndexedStoreQuery;
+  private mutator: IndexedStoreMutator;
+
   constructor(
     private readonly store: PlatformStore,
     private readonly events?: RunEventService,
-  ) {}
+  ) {
+    // Build indices from existing state
+    this.indices = buildIndices(store.state);
+    this.query = new IndexedStoreQuery(store.state, this.indices);
+    this.mutator = new IndexedStoreMutator(this.indices);
+  }
 
   createRun(input: CreateRunInput): Run {
     const run: Run = {
@@ -66,11 +76,11 @@ export class GraphServer {
     const run = this.getRun(runId);
     return {
       run,
-      facts: Object.values(this.store.state.facts).filter((item) => item.runId === runId),
-      intents: Object.values(this.store.state.intents).filter((item) => item.runId === runId),
-      hints: Object.values(this.store.state.hints).filter((item) => item.runId === runId),
-      evidence: Object.values(this.store.state.evidence).filter((item) => item.runId === runId),
-      findings: Object.values(this.store.state.findings).filter((item) => item.runId === runId),
+      facts: this.query.getFactsByRunId(runId),
+      intents: this.query.getIntentsByRunId(runId),
+      hints: this.query.getHintsByRunId(runId),
+      evidence: this.query.getEvidenceByRunId(runId),
+      findings: this.query.getFindingsByRunId(runId),
     };
   }
 
@@ -78,6 +88,7 @@ export class GraphServer {
     this.getRun(runId);
     const hint: Hint = { id: newId('hint'), runId, text, createdAt: nowIso() };
     this.store.state.hints[hint.id] = hint;
+    this.mutator.onHintAdded(hint.id, hint); // Update index
     this.events?.record({
       runId,
       type: 'hint.added',
@@ -125,8 +136,10 @@ export class GraphServer {
       status: 'open',
       createdBy: input.createdBy,
       createdAt: nowIso(),
+      version: 0,
     };
     this.store.state.intents[intent.id] = intent;
+    this.mutator.onIntentAdded(intent.id, intent); // Update index
     this.events?.record({
       runId: input.runId,
       type: 'intent.created',
@@ -164,10 +177,13 @@ export class GraphServer {
     return fact;
   }
 
-  claimIntent(intentId: string, workerName: string, leaseMs: number): Intent {
+  claimIntent(intentId: string, workerName: string, leaseMs: number, expectedVersion?: number): Intent {
     const intent = this.getIntent(intentId);
     if (intent.status !== 'open' && intent.status !== 'released') {
       throw new Error(`Intent ${intentId} is not claimable`);
+    }
+    if (expectedVersion !== undefined && intent.version !== expectedVersion) {
+      throw new Error(`Intent ${intentId} version conflict: expected ${expectedVersion}, found ${intent.version}`);
     }
     const now = Date.now();
     intent.status = 'claimed';
@@ -175,6 +191,7 @@ export class GraphServer {
     intent.leaseId = newId('lease');
     intent.heartbeatAt = new Date(now).toISOString();
     intent.leaseExpiresAt = new Date(now + leaseMs).toISOString();
+    intent.version += 1;
     delete intent.releasedAt;
     delete intent.releaseReason;
     this.events?.record({
@@ -188,10 +205,13 @@ export class GraphServer {
     return intent;
   }
 
-  heartbeatIntent(intentId: string, leaseId: string, leaseMs: number): Intent {
+  heartbeatIntent(intentId: string, leaseId: string, leaseMs: number, expectedVersion?: number): Intent {
     const intent = this.getIntent(intentId);
     if (intent.status !== 'claimed' || intent.leaseId !== leaseId) {
       throw new Error(`Intent lease mismatch: ${intentId}`);
+    }
+    if (expectedVersion !== undefined && intent.version !== expectedVersion) {
+      throw new Error(`Intent ${intentId} version conflict: expected ${expectedVersion}, found ${intent.version}`);
     }
     const now = Date.now();
     if (intent.leaseExpiresAt && Date.parse(intent.leaseExpiresAt) < now) {
@@ -199,6 +219,7 @@ export class GraphServer {
     }
     intent.heartbeatAt = new Date(now).toISOString();
     intent.leaseExpiresAt = new Date(now + leaseMs).toISOString();
+    intent.version += 1;
     this.events?.record({
       runId: intent.runId,
       type: 'intent.heartbeat',
@@ -295,6 +316,7 @@ export class GraphServer {
       createdAt: nowIso(),
     };
     this.store.state.facts[fact.id] = fact;
+    this.mutator.onFactAdded(fact.id, fact); // Update index
     this.events?.record({
       runId: input.runId,
       type: 'fact.added',
