@@ -4,12 +4,18 @@ import type { RunEventService } from '../events/run-event-service.js';
 import type { PlatformStore } from '../storage/store.js';
 
 export class ApprovalService {
+  private readonly defaultTtlMs: number;
+
   constructor(
     private readonly store: PlatformStore,
     private readonly events?: RunEventService,
-  ) {}
+    options: { approvalTtlMs?: number } = {},
+  ) {
+    this.defaultTtlMs = options.approvalTtlMs ?? 60 * 60 * 1000; // Default: 1 hour
+  }
 
-  request(input: { runId: string; tool: string; target: string; riskLevel: RiskLevel; reason: string }): ApprovalRequest {
+  request(input: { runId: string; tool: string; target: string; riskLevel: RiskLevel; reason: string; ttlMs?: number }): ApprovalRequest {
+    const ttl = input.ttlMs ?? this.defaultTtlMs;
     const approval: ApprovalRequest = {
       id: newId('approval'),
       runId: input.runId,
@@ -19,6 +25,7 @@ export class ApprovalService {
       reason: input.reason,
       status: 'pending',
       createdAt: nowIso(),
+      expiresAt: new Date(Date.now() + ttl).toISOString(), // Add expiration
     };
     this.store.state.approvals[approval.id] = approval;
     this.events?.record({
@@ -53,5 +60,27 @@ export class ApprovalService {
       throw new Error(`Approval not found: ${id}`);
     }
     return approval;
+  }
+
+  /**
+   * Check if an approval is expired.
+   * Legacy approvals without expiresAt are considered non-expired.
+   */
+  isExpired(approval: ApprovalRequest): boolean {
+    if (!approval.expiresAt) {
+      return false; // Legacy approval without expiration
+    }
+    return Date.now() >= new Date(approval.expiresAt).getTime();
+  }
+
+  /**
+   * Get the effective status of an approval, considering expiration.
+   * Expired approved/denied approvals are treated as pending.
+   */
+  getEffectiveStatus(approval: ApprovalRequest): ApprovalStatus {
+    if (this.isExpired(approval) && approval.status !== 'pending') {
+      return 'pending'; // Expired approvals revert to pending
+    }
+    return approval.status;
   }
 }

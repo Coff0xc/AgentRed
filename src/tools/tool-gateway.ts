@@ -258,6 +258,7 @@ export class ToolGateway {
     }
 
     const scopeDecision = evaluateScope(
+      input.runId,
       run.scopePolicy,
       input.target,
       input.method,
@@ -374,6 +375,7 @@ export class ToolGateway {
       });
     }
     const scopeDecision = evaluateScope(
+      input.runId,
       run.scopePolicy,
       input.target,
       input.method,
@@ -668,6 +670,12 @@ export class ToolGateway {
       if (approval.target !== expectedTarget) {
         return { valid: false, reason: `Approval ${input.approvalId} target does not match this request` };
       }
+
+      // Check if approval is expired
+      if (this.approvals.isExpired(approval)) {
+        return { valid: false, reason: `Approval ${input.approvalId} has expired` };
+      }
+
       return { valid: true, status: approval.status };
     } catch (error) {
       return { valid: false, reason: error instanceof Error ? error.message : String(error) };
