@@ -1,0 +1,88 @@
+<svg width="1600" height="900" viewBox="0 0 1600 900" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">AgentRed Governed AI Red Team Control Loop</title>
+  <desc id="desc">A visual overview showing authorization scope, AI worker reasoning, dispatcher orchestration, tool gateway policy gates, evidence review, finding validation, reporting, and local storage.</desc>
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#020617" flood-opacity="0.35"/>
+    </filter>
+    <marker id="arrow" markerWidth="14" markerHeight="14" refX="10" refY="7" orient="auto" markerUnits="strokeWidth">
+      <path d="M2 2L10 7L2 12" stroke="#7DD3FC" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+  </defs>
+  <rect width="1600" height="900" rx="48" fill="#0B1120"/>
+  <circle cx="1320" cy="120" r="220" fill="#155E75" opacity="0.18"/>
+  <circle cx="220" cy="760" r="240" fill="#166534" opacity="0.14"/>
+  <rect x="72" y="64" width="1456" height="772" rx="36" fill="#111827" stroke="#334155" stroke-width="2"/>
+  <text x="120" y="135" fill="#F8FAFC" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="54" font-weight="800">AgentRed control loop</text>
+  <text x="120" y="178" fill="#CBD5E1" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="26">AI proposes. The platform governs. Evidence decides.</text>
+
+  <g filter="url(#shadow)">
+    <rect x="120" y="265" width="250" height="142" rx="22" fill="#132033" stroke="#38BDF8" stroke-width="2"/>
+    <text x="148" y="315" fill="#E0F2FE" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="24" font-weight="800">1. Scope</text>
+    <text x="148" y="354" fill="#BAE6FD" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="18">Allowed assets</text>
+    <text x="148" y="383" fill="#BAE6FD" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="18">Methods, rate limits</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="455" y="225" width="270" height="182" rx="22" fill="#13261D" stroke="#34D399" stroke-width="2"/>
+    <text x="485" y="278" fill="#DCFCE7" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="24" font-weight="800">2. AI Worker</text>
+    <text x="485" y="319" fill="#BBF7D0" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="18">Bootstrap, reason, explore</text>
+    <text x="485" y="348" fill="#BBF7D0" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="18">Structured JSON only</text>
+    <text x="485" y="377" fill="#BBF7D0" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="18">No direct tool access</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="810" y="265" width="270" height="142" rx="22" fill="#1E293B" stroke="#A78BFA" stroke-width="2"/>
+    <text x="840" y="315" fill="#F5F3FF" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="24" font-weight="800">3. Dispatcher</text>
+    <text x="840" y="354" fill="#DDD6FE" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="18">Intent leases</text>
+    <text x="840" y="383" fill="#DDD6FE" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="18">Heartbeats and replayable state</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="1160" y="225" width="290" height="182" rx="22" fill="#2A1D16" stroke="#FB923C" stroke-width="2"/>
+    <text x="1190" y="278" fill="#FFEDD5" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="24" font-weight="800">4. Tool Gateway</text>
+    <text x="1190" y="319" fill="#FED7AA" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="18">R0-R4 risk gates</text>
+    <text x="1190" y="348" fill="#FED7AA" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="18">Approvals and audit</text>
+    <text x="1190" y="377" fill="#FED7AA" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="18">Fail-closed execution</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="1160" y="555" width="290" height="150" rx="22" fill="#2C1A1F" stroke="#F87171" stroke-width="2"/>
+    <text x="1190" y="607" fill="#FEE2E2" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="24" font-weight="800">5. Evidence</text>
+    <text x="1190" y="646" fill="#FECACA" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="18">Hash, redact, review</text>
+    <text x="1190" y="675" fill="#FECACA" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="18">No evidence, no finding</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="810" y="555" width="270" height="150" rx="22" fill="#122D2A" stroke="#2DD4BF" stroke-width="2"/>
+    <text x="840" y="607" fill="#CCFBF1" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="24" font-weight="800">6. Findings</text>
+    <text x="840" y="646" fill="#99F6E4" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="18">Candidate, confirmed</text>
+    <text x="840" y="675" fill="#99F6E4" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="18">Validation lifecycle</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="455" y="555" width="270" height="150" rx="22" fill="#1F2937" stroke="#FACC15" stroke-width="2"/>
+    <text x="485" y="607" fill="#FEF9C3" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="24" font-weight="800">7. Reports</text>
+    <text x="485" y="646" fill="#FEF08A" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="18">Markdown bundles</text>
+    <text x="485" y="675" fill="#FEF08A" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="18">Export without raw secrets</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="120" y="555" width="250" height="150" rx="22" fill="#172554" stroke="#60A5FA" stroke-width="2"/>
+    <text x="148" y="607" fill="#DBEAFE" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="24" font-weight="800">8. Local store</text>
+    <text x="148" y="646" fill="#BFDBFE" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="18">SQLite snapshots</text>
+    <text x="148" y="675" fill="#BFDBFE" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="18">Local evidence blobs</text>
+  </g>
+
+  <path d="M370 336 C405 320 420 312 455 312" stroke="#7DD3FC" stroke-width="4" marker-end="url(#arrow)"/>
+  <path d="M725 316 C760 316 775 316 810 326" stroke="#7DD3FC" stroke-width="4" marker-end="url(#arrow)"/>
+  <path d="M1080 336 C1115 320 1125 314 1160 314" stroke="#7DD3FC" stroke-width="4" marker-end="url(#arrow)"/>
+  <path d="M1305 407 C1305 466 1305 500 1305 555" stroke="#7DD3FC" stroke-width="4" marker-end="url(#arrow)"/>
+  <path d="M1160 630 C1120 630 1110 630 1080 630" stroke="#7DD3FC" stroke-width="4" marker-end="url(#arrow)"/>
+  <path d="M810 630 C770 630 760 630 725 630" stroke="#7DD3FC" stroke-width="4" marker-end="url(#arrow)"/>
+  <path d="M455 630 C415 630 405 630 370 630" stroke="#7DD3FC" stroke-width="4" marker-end="url(#arrow)"/>
+  <path d="M245 555 C245 500 245 458 245 407" stroke="#7DD3FC" stroke-width="4" marker-end="url(#arrow)"/>
+
+  <rect x="410" y="770" width="780" height="46" rx="23" fill="#0F172A" stroke="#334155"/>
+  <text x="800" y="802" fill="#CBD5E1" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="20" font-weight="700" text-anchor="middle">Authorized testing only · Local-first evidence · Human approval for high-risk actions</text>
+</svg>
