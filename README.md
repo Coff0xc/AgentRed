@@ -54,49 +54,59 @@ It is not a "give the model a shell and hope" project. AI Workers propose struct
 
 ## Screenshots / 使用截图
 
-### Operator Console / 本地任务控制台
+The screenshots below use the local README demo run (`https://app.example.com`). Token fields are placeholders or password-masked; no live credentials are shown.
 
-Use the local console to create runs, watch mission progress, dispatch AI workers, and see the next safe action.
+以下截图使用本地 README 演示任务（`https://app.example.com`）。令牌输入框为空、占位或密码掩码，不展示真实凭据。
 
-通过本地控制台创建任务、查看任务进度、推进 AI Worker，并清楚看到下一步安全动作。
+### Full Console / 完整控制台
 
 ![AgentRed Operator Console](docs/assets/agentred-operator-console.png)
 
-What to look at:
+Use the local console to create runs, watch mission progress, dispatch AI workers, and keep the next safe action visible.
 
-- **Run History** keeps local assessments visible.
-- **Mission cards** show current step, next best action, evidence count, and report readiness.
-- **Dispatch / Auto Progress / Generate Report** keep automation explicit and operator-controlled.
-- **Local token input** keeps API access local; the static UI shell does not grant data access by itself.
+通过本地控制台创建任务、查看任务进度、推进 AI Worker，并始终看到下一步安全动作。
 
-截图重点：
+### Mission Launch / 任务启动
 
-- **Run History** 展示本地评估任务。
-- **Mission cards** 展示当前步骤、下一步动作、证据数量和报告状态。
-- **Dispatch / Auto Progress / Generate Report** 让自动化始终可控。
-- **Local token input** 只在本地使用；静态 UI 壳本身不授予数据权限。
+| English UI | 中文界面 |
+| --- | --- |
+| ![AgentRed English mission launch pad](docs/assets/agentred-ui-launch-en.png) | ![AgentRed Chinese mission launch pad](docs/assets/agentred-ui-launch-zh.png) |
+| Target, scope, worker model, automation depth, and "create run only" stay in one launch surface. | 目标、授权范围、Worker 模型、自动化深度和“仅创建运行”集中在同一个启动界面。 |
 
-### Evidence Review Workspace / 证据复核工作台
+### Active Run / 当前任务
+
+![AgentRed active run mission state](docs/assets/agentred-ui-mission-en.png)
+
+The active-run view keeps the operator on the control loop: current phase, facts, intents, evidence, findings, approvals, and the next review action.
+
+当前任务视图强调控制闭环：阶段、事实、意图、证据、发现、审批，以及下一步需要复核的动作。
+
+### Evidence Review / 证据复核
 
 Evidence is reviewed before it can become a reportable finding. Raw local evidence stays local by default.
 
 证据必须先复核，才能进入可报告漏洞链路。默认不把 raw local evidence 当作可导出材料。
 
-![AgentRed Evidence Review Workspace](docs/assets/agentred-review-workspace.png)
+| English UI | 中文界面 |
+| --- | --- |
+| ![AgentRed English evidence review workspace](docs/assets/agentred-review-workspace.png) | ![AgentRed Chinese evidence review workspace](docs/assets/agentred-ui-review-zh.png) |
+| Evidence Inbox, Evidence Viewer, review notes, and "Mark useful / Needs context / Not relevant" keep human judgment explicit. | 证据箱、证据查看器、复核备注和“标记有用 / 需要上下文 / 无关”动作，让人工判断写入链路。 |
 
-What to look at:
+### Mobile Console / 移动端控制台
 
-- **Evidence Inbox** lists captured evidence with redaction state and review actions.
-- **Evidence Viewer** shows bounded local content for operator review.
-- **Mark useful / Needs context / Not relevant** records human judgment before finding validation.
-- **Replay HTTP evidence** remains gated and narrow; it is not a hidden exploit runner.
+![AgentRed Chinese mobile console](docs/assets/agentred-ui-mobile-zh.png)
 
-截图重点：
+The responsive layout keeps the same mission controls available on narrow screens: current run, dispatch, metrics, and evidence-first progress.
 
-- **Evidence Inbox** 展示证据、脱敏状态和复核动作。
-- **Evidence Viewer** 展示受限的本地证据内容。
-- **Mark useful / Needs context / Not relevant** 把人工判断写入审计链路。
-- **Replay HTTP evidence** 是受控回放，不是隐藏的利用执行器。
+窄屏布局保留同样的任务控制能力：当前任务、调度按钮、关键指标，以及证据优先的推进状态。
+
+Screenshot highlights / 截图重点：
+
+- **Run History / 运行历史** keeps local assessments visible.
+- **Mission Launch / 任务启动** keeps target, authorization, worker, and automation depth together.
+- **Mission cards / 任务卡片** show current step, next action, evidence count, and report readiness.
+- **Evidence Review / 证据复核** records operator judgment before findings become reportable.
+- **Local token / 本地令牌** is used only by the local UI session; the static shell does not grant data access by itself.
 
 ---
 
