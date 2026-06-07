@@ -1,0 +1,61 @@
+
+=== AgentRed Performance Audit Report ===
+
+websocket_connect:
+  Min: 8.86ms
+  Avg: 18.27ms
+  Max: 49.67ms
+  P50: 11.07ms
+  P95: 49.67ms
+  P99: 49.67ms
+  Samples: 5
+
+websocket_message_latency:
+  Min: 0.35ms
+  Avg: 0.97ms
+  Max: 3.38ms
+  P50: 0.45ms
+  P95: 3.38ms
+  P99: 3.38ms
+  Samples: 10
+
+api_health_check:
+  Min: 2.59ms
+  Avg: 9.54ms
+  Max: 54.83ms
+  P50: 4.01ms
+  P95: 54.83ms
+  P99: 54.83ms
+  Samples: 10
+
+api_create_run:
+  Min: 3.31ms
+  Avg: 6.78ms
+  Max: 19.88ms
+  P50: 4.32ms
+  P95: 19.88ms
+  P99: 19.88ms
+  Samples: 10
+
+api_create_run_full:
+  Min: 3.00ms
+  Avg: 6.75ms
+  Max: 23.74ms
+  P50: 4.09ms
+  P95: 23.74ms
+  P99: 23.74ms
+  Samples: 10
+
+dispatcher_execute:
+  Min: 14.15ms
+  Avg: 14.15ms
+  Max: 14.15ms
+  P50: 14.15ms
+  P95: 14.15ms
+  P99: 14.15ms
+  Samples: 1
+
+Memory Usage:
+  initial: Heap=36.83MB, External=6.55MB
+  after_load: Heap=37.41MB, External=6.55MB
+
