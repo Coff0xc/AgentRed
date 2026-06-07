@@ -4293,6 +4293,642 @@ test('SQLite-backed platform reloads the local graph state', () => {
   }
 });
 
+test('findScannerTemplate uses Map for O(1) lookup and returns correct template', async () => {
+  const { findScannerTemplate, listScannerTemplates } = await import('../src/tools/toolbox-registry.js');
+
+  // Verify Map-based lookup returns correct templates
+  const webSecurityHeaders = findScannerTemplate('web.security_headers');
+  assert.ok(webSecurityHeaders);
+  assert.equal(webSecurityHeaders.id, 'web.security_headers');
+  assert.equal(webSecurityHeaders.name, 'Web Security Headers');
+  assert.equal(webSecurityHeaders.engine, 'builtin');
+  assert.equal(webSecurityHeaders.defaultRiskLevel, 'R2');
+
+  const nucleiTemplate = findScannerTemplate('web.nuclei.safe_templates');
+  assert.ok(nucleiTemplate);
+  assert.equal(nucleiTemplate.id, 'web.nuclei.safe_templates');
+  assert.equal(nucleiTemplate.engine, 'nuclei');
+  assert.equal(nucleiTemplate.executionMode, 'external');
+
+  // Verify non-existent template returns undefined
+  const nonExistent = findScannerTemplate('non.existent.template');
+  assert.equal(nonExistent, undefined);
+
+  // Verify all templates in array are findable via Map
+  const allTemplates = listScannerTemplates();
+  assert.ok(allTemplates.length > 0);
+  for (const template of allTemplates) {
+    const found = findScannerTemplate(template.id);
+    assert.ok(found, `Template ${template.id} should be findable`);
+    assert.deepEqual(found, template);
+  }
+});
+
+test('Optimistic locking: intent version increments on all mutations', () => {
+  const platform = createPlatform();
+  const run = platform.graph.createRun({
+    target: 'https://app.example.com',
+    goal: 'Verify version increments on intent mutations',
+    scopePolicy: policy,
+    workerPool: [{ name: 'mock-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+
+  const intent = platform.graph.createIntent({
+    runId: run.id,
+    fromFactIds: [],
+    hypothesis: 'Test version tracking',
+    riskLevel: 'R1',
+    createdBy: 'test',
+  });
+  assert.equal(intent.version, 0);
+
+  // Claim increments version
+  const claimed = platform.graph.claimIntent(intent.id, 'worker-1', 60_000);
+  assert.equal(claimed.version, 1);
+
+  // Heartbeat increments version
+  const heartbeat = platform.graph.heartbeatIntent(intent.id, claimed.leaseId ?? '', 60_000);
+  assert.equal(heartbeat.version, 2);
+
+  // Release increments version
+  const released = platform.graph.releaseIntent(intent.id, 'test release');
+  assert.equal(released.version, 3);
+
+  // Reclaim and conclude increments version
+  const reclaimed = platform.graph.claimIntent(intent.id, 'worker-2', 60_000);
+  assert.equal(reclaimed.version, 4);
+
+  platform.graph.concludeIntent(intent.id, 'Test conclusion', 'worker-2');
+  const concluded = platform.graph.getGraph(run.id).intents.find((i) => i.id === intent.id);
+  assert.equal(concluded?.version, 5);
+});
+
+test('Optimistic locking: claimIntent detects version conflict', () => {
+  const platform = createPlatform();
+  const run = platform.graph.createRun({
+    target: 'https://app.example.com',
+    goal: 'Detect concurrent claim attempts',
+    scopePolicy: policy,
+    workerPool: [{ name: 'mock-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+
+  const intent = platform.graph.createIntent({
+    runId: run.id,
+    fromFactIds: [],
+    hypothesis: 'Test concurrent claims',
+    riskLevel: 'R1',
+    createdBy: 'test',
+  });
+
+  // Worker-1 observes version 0
+  const observedVersion = intent.version;
+  assert.equal(observedVersion, 0);
+
+  // Worker-2 claims successfully (no version check)
+  const claimed = platform.graph.claimIntent(intent.id, 'worker-2', 60_000);
+  assert.equal(claimed.version, 1);
+
+  // Worker-1 tries to claim with stale version 0 -> conflict
+  assert.throws(
+    () => platform.graph.claimIntent(intent.id, 'worker-1', 60_000, observedVersion),
+    /version conflict: expected 0, found 1/
+  );
+});
+
+test('Optimistic locking: heartbeatIntent detects version conflict', () => {
+  const platform = createPlatform();
+  const run = platform.graph.createRun({
+    target: 'https://app.example.com',
+    goal: 'Detect concurrent heartbeat attempts',
+    scopePolicy: policy,
+    workerPool: [{ name: 'mock-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+
+  const intent = platform.graph.createIntent({
+    runId: run.id,
+    fromFactIds: [],
+    hypothesis: 'Test concurrent heartbeats',
+    riskLevel: 'R1',
+    createdBy: 'test',
+  });
+
+  const claimed = platform.graph.claimIntent(intent.id, 'worker-1', 60_000);
+  assert.equal(claimed.version, 1);
+
+  // Simulate another process heartbeating
+  const heartbeat1 = platform.graph.heartbeatIntent(intent.id, claimed.leaseId ?? '', 60_000);
+  assert.equal(heartbeat1.version, 2);
+
+  // Worker tries to heartbeat with stale version 1 -> conflict
+  assert.throws(
+    () => platform.graph.heartbeatIntent(intent.id, claimed.leaseId ?? '', 60_000, 1),
+    /version conflict: expected 1, found 2/
+  );
+});
+
+test('Optimistic locking: multi-round explore tracks version and heartbeats correctly', async () => {
+  const target = await startTargetServer();
+  const platform = createPlatform();
+  const run = platform.graph.createRun({
+    target: target.url,
+    goal: 'Verify version tracking across multi-round explore',
+    scopePolicy: { ...policy, allowedAssets: ['127.0.0.1'], deniedAssets: [] },
+    workerPool: [{ name: 'multi-round-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+
+  const originFact = platform.graph.getGraph(run.id).facts[0];
+  assert.ok(originFact);
+  platform.graph.createIntent({
+    runId: run.id,
+    fromFactIds: [originFact.id],
+    hypothesis: 'Multi-round with version tracking',
+    riskLevel: 'R1',
+    createdBy: 'test',
+  });
+
+  const versionsObserved: number[] = [];
+
+  const dispatcher = new Dispatcher(platform.graph, {
+    events: platform.events,
+    observability: platform.observability,
+    tools: platform.tools,
+    workerFactory: () =>
+      new StaticWorker('multi-round-worker', async (task) => {
+        if (task.type !== 'explore') return { accepted: false, reason: 'unexpected task type' };
+
+        versionsObserved.push(task.intent.version);
+
+        if (!task.producedEvidenceIds || task.producedEvidenceIds.length === 0) {
+          return {
+            accepted: true,
+            data: {
+              description: 'Round 1: continuing',
+              continueExplore: true,
+              toolRequests: [
+                { tool: 'http.request', target: `${target.url}/profile`, method: 'GET', riskLevel: 'R1', args: {} },
+              ],
+            },
+          };
+        }
+
+        return {
+          accepted: true,
+          data: {
+            description: 'Round 2: concluded',
+            toolRequests: [],
+          },
+        };
+      }),
+  });
+
+  try {
+    const result = await dispatcher.dispatchOnce(run.id);
+    assert.equal(result.status, 'dispatched');
+
+    // Version should increment: 0 (create) -> 1 (claim) -> 2 (heartbeat before round 2) -> 3 (conclude)
+    assert.deepEqual(versionsObserved, [1, 2]);
+
+    const graph = platform.graph.getGraph(run.id);
+    const concluded = graph.intents.find((i) => i.status === 'concluded');
+    assert.ok(concluded);
+    assert.equal(concluded.version, 3); // claim(1) -> heartbeat(2) -> conclude(3)
+  } finally {
+    await target.close();
+  }
+});
+
+test('Optimistic locking: expired lease release increments version', () => {
+  const platform = createPlatform();
+  const run = platform.graph.createRun({
+    target: 'https://app.example.com',
+    goal: 'Verify version increment on expired lease release',
+    scopePolicy: policy,
+    workerPool: [{ name: 'mock-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+
+  const intent = platform.graph.createIntent({
+    runId: run.id,
+    fromFactIds: [],
+    hypothesis: 'Expire this lease',
+    riskLevel: 'R1',
+    createdBy: 'test',
+  });
+
+  const claimed = platform.graph.claimIntent(intent.id, 'stale-worker', 60_000);
+  assert.equal(claimed.version, 1);
+
+  // Force expiry
+  platform.store.state.intents[intent.id].leaseExpiresAt = '2000-01-01T00:00:00.000Z';
+
+  // Release expired intents
+  platform.graph.releaseExpiredIntents(run.id, new Date('2026-06-03T00:00:00.000Z'));
+
+  const released = platform.graph.getGraph(run.id).intents.find((i) => i.id === intent.id);
+  assert.equal(released?.status, 'open');
+  assert.equal(released?.version, 2); // claim(1) -> expire release(2)
+});
+
+test('Optimistic locking: two dispatchers racing to claim the same intent', async () => {
+  const platform = createPlatform();
+  const run = platform.graph.createRun({
+    target: 'https://app.example.com',
+    goal: 'Simulate race condition between two dispatchers',
+    scopePolicy: policy,
+    workerPool: [{ name: 'worker-1', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+
+  const intent = platform.graph.createIntent({
+    runId: run.id,
+    fromFactIds: [],
+    hypothesis: 'Race to claim this intent',
+    riskLevel: 'R1',
+    createdBy: 'test',
+  });
+
+  // Simulate two dispatchers observing the same graph state
+  const graph1 = platform.graph.getGraph(run.id);
+  const graph2 = platform.graph.getGraph(run.id);
+
+  const openIntent1 = graph1.intents.find((i) => i.status === 'open');
+  const openIntent2 = graph2.intents.find((i) => i.status === 'open');
+
+  assert.ok(openIntent1);
+  assert.ok(openIntent2);
+  assert.equal(openIntent1.id, openIntent2.id);
+  assert.equal(openIntent1.version, 0);
+  assert.equal(openIntent2.version, 0);
+
+  // Dispatcher 1 claims with version check
+  const claimed1 = platform.graph.claimIntent(openIntent1.id, 'dispatcher-1', 60_000, openIntent1.version);
+  assert.equal(claimed1.version, 1);
+  assert.equal(claimed1.claimedBy, 'dispatcher-1');
+
+  // Dispatcher 2 tries to claim with stale version -> conflict
+  assert.throws(
+    () => platform.graph.claimIntent(openIntent2.id, 'dispatcher-2', 60_000, openIntent2.version),
+    /version conflict: expected 0, found 1/
+  );
+
+  // Verify only dispatcher-1 holds the lease
+  const finalIntent = platform.graph.getGraph(run.id).intents.find((i) => i.id === intent.id);
+  assert.equal(finalIntent?.status, 'claimed');
+  assert.equal(finalIntent?.claimedBy, 'dispatcher-1');
+  assert.equal(finalIntent?.version, 1);
+});
+
+test('ApprovalService sets expiresAt on approved requests with configured TTL', () => {
+  const approvalTtlMs = 10 * 60 * 1000; // 10 minutes
+  const platform = createPlatform({ approvalTtlMs });
+  const run = platform.graph.createRun({
+    target: 'https://app.example.com',
+    goal: 'Test approval expiry',
+    scopePolicy: policy,
+    workerPool: [{ name: 'mock-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+
+  const approval = platform.approvals.request({
+    runId: run.id,
+    tool: 'http.request',
+    target: 'https://app.example.com/api',
+    riskLevel: 'R3',
+    reason: 'High-risk action requires approval',
+  });
+
+  // Pending approvals should not have expiresAt
+  assert.equal(approval.status, 'pending');
+  assert.equal(approval.expiresAt, undefined);
+
+  const beforeApproval = Date.now();
+  const approved = platform.approvals.decide(approval.id, 'approved');
+  const afterApproval = Date.now();
+
+  // Approved requests should have expiresAt set
+  assert.equal(approved.status, 'approved');
+  assert.ok(approved.expiresAt);
+
+  const expiresAt = Date.parse(approved.expiresAt);
+  assert.ok(Number.isFinite(expiresAt));
+
+  // Verify expiry is approximately TTL from now
+  const expectedExpiry = beforeApproval + approvalTtlMs;
+  const actualExpiry = expiresAt;
+  assert.ok(actualExpiry >= expectedExpiry);
+  assert.ok(actualExpiry <= afterApproval + approvalTtlMs + 1000); // Allow 1s tolerance
+
+  // Rejected approvals should not have expiresAt
+  const rejectedRequest = platform.approvals.request({
+    runId: run.id,
+    tool: 'http.request',
+    target: 'https://app.example.com/api',
+    riskLevel: 'R3',
+    reason: 'Another request',
+  });
+  const rejected = platform.approvals.decide(rejectedRequest.id, 'rejected');
+  assert.equal(rejected.status, 'rejected');
+  assert.equal(rejected.expiresAt, undefined);
+});
+
+test('ApprovalService.isExpired returns false for pending and rejected approvals', () => {
+  const platform = createPlatform({ approvalTtlMs: 1000 });
+  const run = platform.graph.createRun({
+    target: 'https://app.example.com',
+    goal: 'Test approval expiry',
+    scopePolicy: policy,
+    workerPool: [{ name: 'mock-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+
+  const pending = platform.approvals.request({
+    runId: run.id,
+    tool: 'http.request',
+    target: 'https://app.example.com/api',
+    riskLevel: 'R3',
+    reason: 'Pending request',
+  });
+  assert.equal(platform.approvals.isExpired(pending), false);
+
+  const rejected = platform.approvals.request({
+    runId: run.id,
+    tool: 'http.request',
+    target: 'https://app.example.com/api',
+    riskLevel: 'R3',
+    reason: 'Rejected request',
+  });
+  platform.approvals.decide(rejected.id, 'rejected');
+  assert.equal(platform.approvals.isExpired(platform.approvals.get(rejected.id)), false);
+});
+
+test('ApprovalService.isExpired returns false for approvals without expiresAt (backward compatibility)', () => {
+  const platform = createPlatform();
+  const run = platform.graph.createRun({
+    target: 'https://app.example.com',
+    goal: 'Test backward compatibility',
+    scopePolicy: policy,
+    workerPool: [{ name: 'mock-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+
+  const approval = platform.approvals.request({
+    runId: run.id,
+    tool: 'http.request',
+    target: 'https://app.example.com/api',
+    riskLevel: 'R3',
+    reason: 'Legacy approval',
+  });
+
+  platform.approvals.decide(approval.id, 'approved');
+  const approved = platform.approvals.get(approval.id);
+
+  // Manually remove expiresAt to simulate legacy approval
+  delete (approved as any).expiresAt;
+
+  // Legacy approvals without expiresAt should never expire
+  assert.equal(platform.approvals.isExpired(approved), false);
+});
+
+test('ApprovalService.isExpired returns true for expired approvals', async () => {
+  const approvalTtlMs = 100; // 100ms for fast test
+  const platform = createPlatform({ approvalTtlMs });
+  const run = platform.graph.createRun({
+    target: 'https://app.example.com',
+    goal: 'Test approval expiry',
+    scopePolicy: policy,
+    workerPool: [{ name: 'mock-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+
+  const approval = platform.approvals.request({
+    runId: run.id,
+    tool: 'http.request',
+    target: 'https://app.example.com/api',
+    riskLevel: 'R3',
+    reason: 'Will expire soon',
+  });
+
+  platform.approvals.decide(approval.id, 'approved');
+  const approved = platform.approvals.get(approval.id);
+
+  // Should not be expired immediately
+  assert.equal(platform.approvals.isExpired(approved), false);
+
+  // Wait for expiry
+  await new Promise((resolve) => setTimeout(resolve, 150));
+
+  // Should now be expired
+  assert.equal(platform.approvals.isExpired(approved), true);
+});
+
+test('ToolGateway blocks expired approvals and returns appropriate error', async () => {
+  const target = await startTargetServer();
+  const approvalTtlMs = 100; // 100ms for fast test
+  const platform = createPlatform({ approvalTtlMs });
+  const run = platform.graph.createRun({
+    target: target.url,
+    goal: 'Test expired approval blocking',
+    scopePolicy: {
+      ...policy,
+      allowedAssets: ['127.0.0.1'],
+      deniedAssets: [],
+    },
+    workerPool: [{ name: 'mock-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+
+  try {
+    // Request approval for R3 action
+    const approvalRequest = await platform.tools.invoke({
+      runId: run.id,
+      tool: 'oast.start_session',
+      target: `${target.url}/webhook`,
+      method: 'POST',
+      riskLevel: 'R3',
+      args: {},
+    });
+    assert.equal(approvalRequest.status, 'approval_required');
+    assert.ok(approvalRequest.approvalId);
+
+    // Approve the request
+    platform.approvals.decide(approvalRequest.approvalId, 'approved');
+
+    // Wait for approval to expire
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    // Try to use expired approval
+    const result = await platform.tools.invoke({
+      runId: run.id,
+      tool: 'oast.start_session',
+      target: `${target.url}/webhook`,
+      method: 'POST',
+      riskLevel: 'R3',
+      args: {},
+      approvalId: approvalRequest.approvalId,
+    });
+
+    assert.equal(result.status, 'blocked');
+    assert.ok(result.reason.includes('expired'));
+    assert.ok(result.reason.includes(approvalRequest.approvalId));
+  } finally {
+    await target.close();
+  }
+});
+
+test('ToolGateway automatically creates new approval request when approval expires', async () => {
+  const target = await startTargetServer();
+  const approvalTtlMs = 100; // 100ms for fast test
+  const platform = createPlatform({ approvalTtlMs });
+  const run = platform.graph.createRun({
+    target: target.url,
+    goal: 'Test automatic re-request on expiry',
+    scopePolicy: {
+      ...policy,
+      allowedAssets: ['127.0.0.1'],
+      deniedAssets: [],
+    },
+    workerPool: [{ name: 'mock-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+
+  try {
+    // Request initial approval
+    const firstRequest = await platform.tools.invoke({
+      runId: run.id,
+      tool: 'oast.start_session',
+      target: `${target.url}/webhook`,
+      method: 'POST',
+      riskLevel: 'R3',
+      args: {},
+    });
+    assert.equal(firstRequest.status, 'approval_required');
+    const firstApprovalId = firstRequest.approvalId!;
+
+    // Approve and wait for expiry
+    platform.approvals.decide(firstApprovalId, 'approved');
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    // Use expired approval - should get new approval request
+    const result = await platform.tools.invoke({
+      runId: run.id,
+      tool: 'oast.start_session',
+      target: `${target.url}/webhook`,
+      method: 'POST',
+      riskLevel: 'R3',
+      args: {},
+      approvalId: firstApprovalId,
+    });
+
+    assert.equal(result.status, 'approval_required');
+    assert.ok(result.approvalId);
+    assert.notEqual(result.approvalId, firstApprovalId); // New approval request created
+    assert.ok(result.reason.includes('expired'));
+
+    // Verify new approval exists
+    const newApproval = platform.approvals.get(result.approvalId);
+    assert.equal(newApproval.status, 'pending');
+    assert.equal(newApproval.runId, run.id);
+    assert.equal(newApproval.tool, 'oast.start_session');
+    assert.ok(newApproval.reason.includes('Previous approval'));
+    assert.ok(newApproval.reason.includes(firstApprovalId));
+  } finally {
+    await target.close();
+  }
+});
+
+test('ToolGateway allows approved non-expired approvals', async () => {
+  const target = await startTargetServer();
+  const approvalTtlMs = 5000; // 5 seconds, won't expire during test
+  const platform = createPlatform({ approvalTtlMs });
+  const run = platform.graph.createRun({
+    target: target.url,
+    goal: 'Test valid approval usage',
+    scopePolicy: {
+      ...policy,
+      allowedAssets: ['127.0.0.1'],
+      deniedAssets: [],
+    },
+    workerPool: [{ name: 'mock-worker', type: 'mock', maxRunning: 1, priority: 0 }],
+  });
+
+  try {
+    // Request approval
+    const approvalRequest = await platform.tools.invoke({
+      runId: run.id,
+      tool: 'oast.start_session',
+      target: `${target.url}/webhook`,
+      method: 'POST',
+      riskLevel: 'R3',
+      args: {},
+    });
+    assert.equal(approvalRequest.status, 'approval_required');
+
+    // Approve
+    platform.approvals.decide(approvalRequest.approvalId!, 'approved');
+
+    // Use immediately (should succeed)
+    const result = await platform.tools.invoke({
+      runId: run.id,
+      tool: 'oast.start_session',
+      target: `${target.url}/webhook`,
+      method: 'POST',
+      riskLevel: 'R3',
+      args: {},
+      approvalId: approvalRequest.approvalId,
+    });
+
+    assert.equal(result.status, 'allowed');
+  } finally {
+    await target.close();
+  }
+});
+
+test('Environment variable PLATFORM_APPROVAL_TTL_MINUTES configures TTL', () => {
+  const { resolveApiStartupConfig } = await import('../src/api/startup-config.js');
+
+  // Test default (15 minutes = 900000ms)
+  const defaultConfig = resolveApiStartupConfig({ PLATFORM_API_TOKEN: 'test-token' });
+  assert.equal(defaultConfig.approvalTtlMs, 15 * 60 * 1000);
+
+  // Test custom value
+  const customConfig = resolveApiStartupConfig({
+    PLATFORM_API_TOKEN: 'test-token',
+    PLATFORM_APPROVAL_TTL_MINUTES: '30',
+  });
+  assert.equal(customConfig.approvalTtlMs, 30 * 60 * 1000);
+
+  // Test minimum boundary
+  const minConfig = resolveApiStartupConfig({
+    PLATFORM_API_TOKEN: 'test-token',
+    PLATFORM_APPROVAL_TTL_MINUTES: '1',
+  });
+  assert.equal(minConfig.approvalTtlMs, 60 * 1000);
+
+  // Test maximum boundary (24 hours = 1440 minutes)
+  const maxConfig = resolveApiStartupConfig({
+    PLATFORM_API_TOKEN: 'test-token',
+    PLATFORM_APPROVAL_TTL_MINUTES: '1440',
+  });
+  assert.equal(maxConfig.approvalTtlMs, 1440 * 60 * 1000);
+
+  // Test invalid values
+  assert.throws(
+    () => resolveApiStartupConfig({
+      PLATFORM_API_TOKEN: 'test-token',
+      PLATFORM_APPROVAL_TTL_MINUTES: '0',
+    }),
+    /PLATFORM_APPROVAL_TTL_MINUTES must be an integer between 1 and 1440/
+  );
+
+  assert.throws(
+    () => resolveApiStartupConfig({
+      PLATFORM_API_TOKEN: 'test-token',
+      PLATFORM_APPROVAL_TTL_MINUTES: '1441',
+    }),
+    /PLATFORM_APPROVAL_TTL_MINUTES must be an integer between 1 and 1440/
+  );
+
+  assert.throws(
+    () => resolveApiStartupConfig({
+      PLATFORM_API_TOKEN: 'test-token',
+      PLATFORM_APPROVAL_TTL_MINUTES: 'invalid',
+    }),
+    /PLATFORM_APPROVAL_TTL_MINUTES must be an integer between 1 and 1440/
+  );
+});
+
 function createSafeToolScript(name: string): string {
   const safeToolsDir = join(process.cwd(), '.local', 'safe-tools');
   mkdirSync(safeToolsDir, { recursive: true });

@@ -742,8 +742,13 @@ export function listToolboxBundles(): ToolboxBundle[] {
   return TOOLBOX_BUNDLES;
 }
 
+// Performance optimization: Build Map for O(1) scanner template lookup
+const SCANNER_TEMPLATE_MAP = new Map<string, ToolTemplateProfile>(
+  SCANNER_TEMPLATES.map((template) => [template.id, template])
+);
+
 export function findScannerTemplate(templateId: string): ToolTemplateProfile | undefined {
-  return SCANNER_TEMPLATES.find((template) => template.id === templateId);
+  return SCANNER_TEMPLATE_MAP.get(templateId);
 }
 
 export function scannerTemplatePolicy(templateId: string): ScannerTemplatePolicy | undefined {
