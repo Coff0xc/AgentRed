@@ -38,6 +38,6 @@
     "ws": "^8.21.0"
   },
   "optionalDependencies": {
-    "playwright": "^1.49.0"
+    "playwright": "^1.63.0"
   }
 }
